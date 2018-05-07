@@ -66,12 +66,12 @@ set.seed(123) #Setseed
   source(./jags_model)
   
   #RUN MODEL
-  jdat3 <- list(N=length(d1$ipdN), offset=d1$offset, 
+jdat3 <- list(N=length(d1$ipdN.sim), offset=d1$offset, 
                t1=t1,
               t2=t2,
               t3=t3,
               epiyrN=epiyrN, 
-              ipdN=d1$ipdN,
+              ipdN=d1$ipdN.sim,
               obs.st.cm.age.indx=d1$obs.st.cm.age.indx, 
               obs.st.indx=d1$obs.st.indx,
               obs.pcvgrp.indx=d1$obs.pcvgrp.indx,
