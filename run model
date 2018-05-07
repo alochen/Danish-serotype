@@ -82,10 +82,10 @@ jdat3 <- list(N=length(d1$ipdN.sim), offset=d1$offset,
               n.risk=length(unique.cm.age.indx) )
 jmod3 <- jags.model(textConnection(jcode3), data=jdat3, n.chains=2, n.adapt=1000)
 update(jmod3,5000)
-jpos3 <- coda.samples(jmod3, c("period",'ave.period', "beta4_v_s_g", "beta5_v_s_g",'sd.beta4_v_s_g',
+jpos3 <- coda.samples(jmod3, c("period", "beta4_v_s_g", "beta5_v_s_g",'sd.beta4_v_s_g',
                                'sd.beta5_v_s_g','beta1_s_g','beta2_s_g','beta1_s', 'beta2_s' ,'beta4_v','beta5_v','alpha_s','alpha_s_g',
-                               'beta4_s','beta5_s','beta3_s','beta3_s_g', 'sd.b4_s', 'sd.b5_s','disp','alpha_s_g_ctr','log.rr.last.yr.st'
-                               ,'log.rr.last.yr.vsg'), n.iter=10000, thin=1)
+                               'beta4_s','beta5_s','beta3_s','beta3_s_g', 'sd.b4_s', 'sd.b5_s','disp'), n.iter=10000, thin=1)
+
                                
   ### PLOT OBSERVED VS EXPECTED
   combined.results.mcmc<- rbind(jpos3[[1]] ,jpos3[[2]] )
