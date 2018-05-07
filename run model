@@ -1,0 +1,144 @@
+set.seed(123) #Setseed
+  library(plyr)
+  library (RCurl)
+  library (plotrix)
+  library(boot)
+  library(reshape2)
+  library(reshape)
+  library(RColorBrewer)
+  library(rjags)
+  library(RVAideMemoire)
+  library(lme4)
+  library(mcmcplots)
+  library(coda)
+
+#### Download JAGS ####
+  jagsExists = url.exists("http://sourceforge.net/projects/mcmc-jags/files/latest/download")
+  # Regular HTTP
+  if(jagsExists) {
+    txt = getURL("http://sourceforge.net/projects/mcmc-jags/files/latest/download")}
+  library(coda)
+
+#############################
+#Read in and format data
+  d1<-read.csv("XXX.csv")
+  names(d1)[which(names(d1)=='cmlevel')]<-'cm.age.level'
+  d1$agegrp<-d1$agec
+  d1$pcv7.spl<-d1$epiyr - 2006  # change beings 2007/08
+  d1$pcv7.spl[d1$pcv7.spl<0]<-0
+  d1$pcv13.spl<-d1$epiyr - 2009 #dcline begins 2010/11 
+  d1$pcv13.spl[d1$pcv13.spl<0]<-0
+  d1$pcv7st<-0
+  d1$pcv13st<-0
+  d1$pcv7st[d1$st=='4'|d1$st=='6B'|d1$st=='9V'|d1$st=='14'|d1$st=='18C'|d1$st=='19F'|d1$st=='23F']<-1
+  d1$pcv13st[d1$st=='1'|d1$st=='3'|d1$st=='5'|d1$st=='6A'|d1$st=='7F'|d1$st=='19A']<-1
+  d1$nvt<-0
+  d1$nvt[d1$pcv7st==0 & d1$pcv13st==0]<-1
+  d1$pcvgrp<-3
+  d1$pcvgrp[d1$pcv7st==1]<-1
+  d1$pcvgrp[d1$pcv13st==1]<-2
+  d1$post.pcv<-0
+  d1$post.pcv[d1$epiyr>=2007]<-1
+  d1$st<-as.character(d1$st)
+  d1<-d1[d1$epiyr>=1994  ,]
+  epiyrN=d1$epiyr-1994
+###Format splines to capture change in trend after PCV7/13
+  bs.test<-bs(d1$epiyr,  knots = c(2006,2009), degree = 1)
+  t1<-bs.test[,1]
+  t2<-bs.test[,2]
+  t3<-bs.test[,3]
+#View splines to check
+  plot(d1$epiyr,t2)
+  points(d1$epiyr,t3,col='red')
+  points(d1$epiyr,t1, col='blue')
+
+###Create indices for loops to use in JAGS
+  d1$obs.st.indx<-  as.integer(as.factor(d1$st)) #observation level dataset, serotype index
+  d1$obs.pcvgrp.indx<-  as.integer( d1$pcvgrp) #observation level dataset, pcvgrp index
+  d1$obs.st.cm.age.indx<-  as.integer( interaction(d1$st,d1$agegrp, d1$cmlevel, drop=TRUE)) #observation level dataset, pcvgrp index
+  d1$obs.cm.age.indx<-  as.integer( interaction(d1$agegrp, d1$cmlevel, drop=TRUE)) #observation level dataset, pcvgrp index
+  unique.st.cm.age.indx<-  unique(cbind.data.frame(d1$obs.st.cm.age.indx,d1$obs.st.indx,d1$obs.cm.age.indx, d1$obs.pcvgrp.indx, d1$st, d1$cmlevel, d1$agegrp)) #Use this for st/cm/age-level loop
+  unique.st.cm.age.indx.SORTED<-unique.st.cm.age.indx[order(unique.st.cm.age.indx[,1]),]
+  unique.st.indx<-unique(cbind.data.frame(d1$obs.st.indx, d1$obs.pcvgrp.indx ,d1$st))
+  unique.cm.age.indx<-  unique(d1$obs.cm.age.indx) #Use this for cm/age-level loop
+  
+  ##Read in model
+  source(./jags_model)
+  
+  #RUN MODEL
+  jdat3 <- list(N=length(d1$ipdN), offset=d1$offset, 
+               t1=t1,
+              t2=t2,
+              t3=t3,
+              epiyrN=epiyrN, 
+              ipdN=d1$ipdN,
+              obs.st.cm.age.indx=d1$obs.st.cm.age.indx, 
+              obs.st.indx=d1$obs.st.indx,
+              obs.pcvgrp.indx=d1$obs.pcvgrp.indx,
+              ts.loop.st.index=unique.st.cm.age.indx.SORTED[,2],
+              ts.loop.cm.age.index=unique.st.cm.age.indx.SORTED[,3],
+              st.loop.pcv.index=unique.st.indx[,2],
+              Nstcmagecombos=nrow(unique.st.cm.age.indx.SORTED),
+              Nsts=nrow(unique.st.indx),
+              n.risk=length(unique.cm.age.indx) )
+jmod3 <- jags.model(textConnection(jcode3), data=jdat3, n.chains=2, n.adapt=1000)
+update(jmod3,5000)
+jpos3 <- coda.samples(jmod3, c("period",'ave.period', "beta4_v_s_g", "beta5_v_s_g",'sd.beta4_v_s_g',
+                               'sd.beta5_v_s_g','beta1_s_g','beta2_s_g','beta1_s', 'beta2_s' ,'beta4_v','beta5_v','alpha_s','alpha_s_g',
+                               'beta4_s','beta5_s','beta3_s','beta3_s_g', 'sd.b4_s', 'sd.b5_s','disp','alpha_s_g_ctr','log.rr.last.yr.st'
+                               ,'log.rr.last.yr.vsg'), n.iter=10000, thin=1)
+                               
+  ### PLOT OBSERVED VS EXPECTED
+  combined.results.mcmc<- rbind(jpos3[[1]] ,jpos3[[2]] )
+  samplesN<-sample(1:nrow(combined.results.mcmc),2000)
+  samplesN<-sort(samplesN)
+  combined.results.mcmc<-combined.results.mcmc[sample(nrow(combined.results.mcmc), 2000),] #take a random set of 2K MCMC draws
+  mcmc.labels<-colnames(combined.results.mcmc)
+  t.countfact<- epiyrN/12
+  obs.st.indx<-d1$obs.st.indx
+  obs.st.cm.age.indx<-d1$obs.st.cm.age.indx
+  pcv7.spl<-d1$pcv7.spl
+  pcv13.spl<-d1$pcv13.spl
+  log.lambda<-matrix(nrow=nrow(d1), ncol=nrow(combined.results.mcmc))
+  log.lambda.novax<-matrix(nrow=nrow(d1), ncol=nrow(combined.results.mcmc))
+  log.lambda.quant<-matrix(nrow=nrow(d1), ncol=3)
+  log.lambda.novax.quant<-matrix(nrow=nrow(d1), ncol=3)
+  alpha_s_g<- combined.results.mcmc[,grep("alpha_s_g[", mcmc.labels, fixed=TRUE)]
+  beta1_s_g<- combined.results.mcmc[,grep("beta1_s_g[", mcmc.labels, fixed=TRUE)]
+  beta2_s_g<- combined.results.mcmc[,grep("beta2_s_g[", mcmc.labels, fixed=TRUE)]
+  beta3_s_g<- combined.results.mcmc[,grep("beta3_s_g[", mcmc.labels, fixed=TRUE)]
+  beta4_s<- combined.results.mcmc[,grep("beta4_s[", mcmc.labels, fixed=TRUE)]
+  beta5_s<- combined.results.mcmc[,grep("beta5_s[", mcmc.labels, fixed=TRUE)]
+  beta4_v_s_g<- combined.results.mcmc[,grep("beta4_v_s_g[", mcmc.labels, fixed=TRUE)]
+  beta5_v_s_g<- combined.results.mcmc[,grep("beta5_v_s_g[", mcmc.labels, fixed=TRUE)]
+  log.rr.last.yr.st<- beta4_s*t2[20] + beta5_s*t3[20]  #do this to see if como of b4 and b5 is identifiable 
+  #Trace plots of combined effect of beta4_s and beta5_s in last year
+    #for(i in 1:ncol(log.rr.last.yr.st)){plot(log.rr.last.yr.st[,i], type='l');title(unique.st.indx[i,3])}
+disp<-combined.results.mcmc[,grep("disp[", mcmc.labels, fixed=TRUE)]
+offset<-d1$offset
+period<-combined.results.mcmc[,grep("period[", mcmc.labels, fixed=TRUE)]
+
+for(i in 1:nrow(d1)){ 
+  log.lambda[i,] <- (log(offset[i]) + alpha_s_g[,obs.st.cm.age.indx[i]]  
+                     + beta1_s_g[,obs.st.cm.age.indx[i]]*cos(2*3.14159*epiyrN[i]/period[,obs.st.indx[i]] ) 
+                     + beta2_s_g[,obs.st.cm.age.indx[i]]*sin(2*3.14159*epiyrN[i]/period[,obs.st.indx[i]] ) 
+                     + beta3_s_g[,obs.st.cm.age.indx[i]]*t1[i]   #secular trend
+                     +beta4_v_s_g[,obs.st.cm.age.indx[i]]*t2[i]  #PCV7-associated change
+                     +beta5_v_s_g[,obs.st.cm.age.indx[i]]*t3[i]  #PCV13-associated change
+                     + disp[,i] )
+  #counterfactual
+  log.lambda.novax[i,]<- (log(offset[i]) + alpha_s_g[,obs.st.cm.age.indx[i]] 
+                          + beta1_s_g[,obs.st.cm.age.indx[i]]*cos(2*3.14159*epiyrN[i]/period[,obs.st.indx[i]] ) 
+                          + beta2_s_g[,obs.st.cm.age.indx[i]]*sin(2*3.14159*epiyrN[i]/period[,obs.st.indx[i]] ) 
+                          + beta3_s_g[,obs.st.cm.age.indx[i]]*t.countfact[i]  #for counterfactual, assume trend continued
+                          + disp[,i])
+  log.lambda.quant[i,]<-quantile(log.lambda[i,],probs=c(0.025,0.5,0.975))
+  log.lambda.novax.quant[i,]<-quantile(log.lambda.novax[i,],probs=c(0.025,0.5,0.975))
+}
+expected.cases.quant<- exp(log.lambda.quant)
+colnames(expected.cases.quant)<-c('2.5%','50%','97.5%')
+expected.cases.quant<-cbind.data.frame(d1[,c('obs.st.cm.age.indx','st','agegrp','cmlevel','pcvgrp','epiyr')], expected.cases.quant)
+expected.cases.novax.quant<-exp(log.lambda.novax.quant) 
+colnames(expected.cases.novax.quant)<-c('2.5%','50%','97.5%')
+expected.cases.novax.quant<-cbind.data.frame(d1[,c('obs.st.cm.age.indx','st','agegrp','cmlevel','pcvgrp','epiyr')],expected.cases.novax.quant)
+                           
