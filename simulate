@@ -1,0 +1,15 @@
+#Used this to simulate some sample data to test models
+  grp.level<-as.numeric(as.factor(paste0(d1$cmlevel, d1$st, d1$agec)))
+  grp.level.mean<-rnorm(n=length(unique(grp.level)),mean=20, sd=10)
+  grp.level.mean[grp.level.mean<1] <- 1
+  ipdN.sim<-rep(NA, length(grp.level))
+  lambda1<-grp.level.mean
+  lambda1[d1$epiyrN>=2007 & d1$pcvgrp ==1]<- lambda1 *(d1$epiyr-2006)*-0.43 #PCV7 ST decrease by 95%
+  lambda1[d1$epiyrN>=2007 & d1$pcvgrp %in% c(2,3)]<- lambda1 *(d1$epiyr-2006)*0.099 #non-PCV7 serotype increase by 2x by end of study
+  lambda1[d1$epiyrN>=2010 & d1$pcvgrp ==2]<- lambda1 *(d1$epiyr-2006)*-0.30 #PCV13 serotypes increase from 2007-2010, thn decrease 70% in 4 years
+  
+    for(i in 1:length(grp.level)){
+    ipdN.sim[i]<-rpois(n=1,lambda=grp.level.mean[grp.level[i]])
+    }
+   d1$ipdN<-ipdN.sim
+   names(d1)[1]<-'ipdN.sim'
