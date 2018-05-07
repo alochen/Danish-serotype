@@ -22,7 +22,6 @@ set.seed(123) #Setseed
 #############################
 #Read in and format data
   d1<-read.csv("XXX.csv")
-  names(d1)[which(names(d1)=='cmlevel')]<-'cm.age.level'
   d1$agegrp<-d1$agec
   d1$pcv7.spl<-d1$epiyr - 2006  # change beings 2007/08
   d1$pcv7.spl[d1$pcv7.spl<0]<-0
