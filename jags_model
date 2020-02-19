@@ -1,7 +1,117 @@
+#based on trace plot, seems that beta4 (pcv7 effect) and beta5 (pcv13 effect) are not individually identifiable in this version, but combination is?.
+
+#Changes to make: share harmonics by ST
+#Change variance on st/cm/age to be at st level (rather than at grouping level
+
+#Set number of iterations for MCMC here
+iterations=10000
+#install.packages("plyr")
+library(plyr)
+
+#install.packages("RCurl")
+#install.packages("boot")
+#install.packages("reshape2")
+#install.packages("plotrix")
+#install.packages("rjags")
+#install.packages("RVAideMemoire")
+#install.packages("lme4")
+#install.packages("reshape")
+#install.packages("mcmcplots")
+library (RCurl)
+library (plotrix)
+library(boot)
+library(reshape2)
+library(reshape)
+library(RColorBrewer)
+library(rjags)
+library(RVAideMemoire)
+library(lme4)
+library(mcmcplots)
+#### Download JAGS ####
+jagsExists = url.exists("http://sourceforge.net/projects/mcmc-jags/files/latest/download")
+# Regular HTTP
+if(jagsExists) {
+  txt = getURL("http://sourceforge.net/projects/mcmc-jags/files/latest/download")}
+#### Set your working directory ####
+library(coda)
+library(splines)
+setwd("C:\\Users\\DMW63\\Desktop\\My documents h\\invasiveness") # change as appropriate
+
+
+##SET SEED
+set.seed(123)
+
+d1<-read.csv("C:\\Users\\DMW63\\Desktop\\My documents h\\SSI\\polished\\long-term dynamics\\st_level_12_8_2016_cm_UNFILTERED.csv")
+names(d1)[which(names(d1)=='cmlevel')]<-'cm.age.level'
+d1$cmlevel<-gsub("\\_.*","",d1$cm.age.level)
+d1$agegrp<-substr(as.character(d1$cm.age.level),start=3,stop=3)
+d1$pcv7.spl<-d1$epiyr - 2006  # change beings 2007/08
+d1$pcv7.spl[d1$pcv7.spl<0]<-0
+d1$pcv13.spl<-d1$epiyr - 2009 #dcline begins 2010/11 
+d1$pcv13.spl[d1$pcv13.spl<0]<-0
+d1$pcv7st<-0
+d1$pcv13st<-0
+d1$pcv7st[d1$st=='4'|d1$st=='6B'|d1$st=='9V'|d1$st=='14'|d1$st=='18C'|d1$st=='19F'|d1$st=='23F']<-1
+d1$pcv13st[d1$st=='1'|d1$st=='3'|d1$st=='5'|d1$st=='6A'|d1$st=='7F'|d1$st=='19A']<-1
+d1$nvt<-0
+d1$nvt[d1$pcv7st==0 & d1$pcv13st==0]<-1
+d1$pcvgrp<-3
+d1$pcvgrp[d1$pcv7st==1]<-1
+d1$pcvgrp[d1$pcv13st==1]<-2
+d1$post.pcv<-0
+d1$post.pcv[d1$epiyr>=2007]<-1
+d1$st<-as.character(d1$st)
+d1<-d1[d1$epiyr>=1994  ,]
+#d1$cmlevel<-d1$cmlevel
+
+length(unique(d1$st))
+
+t1<-aggregate(d1$ipdN, by=list(d1$epiyr), FUN=sum)
+prop.table(t1, 1)
+
+bs.test<-bs(d1$epiyr,  knots = c(2006,2009), degree = 1)
+#bs.test<-bs(d1$epiyr,  knots = c(2009), Boundary.knots=c(2006, max(d1$epiyr)),degree = 1)
+t1<-bs.test[,1]
+t2<-bs.test[,2]
+t3<-bs.test[,3]
+
+#t1<-d1$t.std
+#t2<-as.vector(d1$pcv7.spl)
+#t3<-as.vector(d1$pcv13.spl)
+plot(d1$epiyr,t2)
+points(d1$epiyr,t3,col='red')
+points(d1$epiyr,t1, col='blue')
+
+epiyrN=d1$epiyr-1994
+
+##simpson's D
+# d1.pre<-d1[d1$epiyr<=2006,]
+# pre.sum<-aggregate(d1.pre$ipdN, by=list(d1.pre$agegrp, d1.pre$st), FUN=sum)
+# names(pre.sum)<-c("agegrp",'st','ipdN')
+# simp1.sum<-aggregate(pre.sum$ipdN, by=list(pre.sum$agegrp), FUN=sum)
+# names(simp1.sum)<-c("agegrp",'ipdN.sum.level')
+# simp2<- merge(simp1.sum, pre.sum, by='agegrp')
+# simp2$simp.part<-(simp2$ipdN/simp2$ipdN.sum.level)^2
+# simp1.sum<-aggregate(simp2$simp.part, by=list(simp2$agegrp), FUN=sum)
+# simp1.sum$simpD<-1-simp1.sum$x
+
+#Create indices for loops--start with observation level and then collapse down to unique ombinations to ensure they match at all levels
+d1$obs.st.indx<-  as.integer(as.factor(d1$st)) #observation level dataset, serotype index
+d1$obs.pcvgrp.indx<-  as.integer( d1$pcvgrp) #observation level dataset, pcvgrp index
+d1$obs.st.cm.age.indx<-  as.integer( interaction(d1$st,d1$agegrp, d1$cmlevel, drop=TRUE)) #observation level dataset, pcvgrp index
+d1$obs.cm.age.indx<-  as.integer( interaction(d1$agegrp, d1$cmlevel, drop=TRUE)) #observation level dataset, pcvgrp index
+
+unique.st.cm.age.indx<-  unique(cbind.data.frame(d1$obs.st.cm.age.indx,d1$obs.st.indx,d1$obs.cm.age.indx, d1$obs.pcvgrp.indx, d1$st, d1$cmlevel, d1$agegrp)) #Use this for st/cm/age-level loop
+unique.st.cm.age.indx.SORTED<-unique.st.cm.age.indx[order(unique.st.cm.age.indx[,1]),]
+
+unique.st.indx<-unique(cbind.data.frame(d1$obs.st.indx, d1$obs.pcvgrp.indx ,d1$st))
+
+unique.cm.age.indx<-  unique(d1$obs.cm.age.indx) #Use this for cm/age-level loop
+
 jcode3 <- "
 model{ 
 for(i in 1:N){ 
- 	ipdN[i] ~ dpois(exp(log.lambda[i]))
+ipdN[i] ~ dpois(exp(log.lambda[i]))
 #Model
 log.lambda[i] <- log(offset[i]) + alpha_s_g[obs.st.cm.age.indx[i]] 
 + beta1_s_g[obs.st.cm.age.indx[i]]*cos(2*3.14159*epiyrN[i]/period[obs.st.indx[i]] ) 
@@ -11,22 +121,35 @@ log.lambda[i] <- log(offset[i]) + alpha_s_g[obs.st.cm.age.indx[i]]
 + beta5_v_s_g[obs.st.cm.age.indx[i]]*t3[i] #PCV13-associated change
 + disp[i] 
 
-disp[i] ~ dnorm( 0, tau.disp) #dispersion parameter
+disp[i] ~ dnorm( 0, tau.disp) #dispersion parameter; with diff variance for each TS
+
 }
 
 #Loop for each serotype/age group/comorbid group combo
 for(w in 1:Nstcmagecombos) {
-#intercept for the st/rg combo depends on intercept for the rg and intercept for st  
- mu_s_g[w] <- alpha + alpha_s[ts.loop.st.index[w]] +alpha_g[ts.loop.cm.age.index[w]] 
- alpha_s_g[w] ~ dnorm(mu_s_g[w],  tau.alpha_s_g) 
+#intercept and harmonic components are estimated for each serotype (below) and then allowed to 
+#vary by risk group
+
+
+#intercept for the st/rg combo depends on intercept for the rg and intercept for the serotype
+mu_s_g[w] <- alpha + alpha_s[ts.loop.st.index[w]] +alpha_g[ts.loop.cm.age.index[w]] 
+alpha_s_g[w] ~ dnorm(mu_s_g[w],  tau.alpha_s_g) #intercept shrinks to serotype/risk group intercept
+
+alpha_s_g_ctr[w]<-alpha_s_g[w]-mu_s_g[w]
+
 #Harmonic components
- beta1_s_g[w] ~ dnorm(beta1_s[ts.loop.st.index[w]], tau.beta1_s_g) 
- beta2_s_g[w] ~ dnorm(beta2_s[ts.loop.st.index[w]], tau.beta2_s_g) 
-#Secular trend
- beta3_s_g[w] ~ dnorm(beta3_s[ts.loop.st.index[w]], tau.beta3_s_g) 
-#Vaccine-associated Slope; centered around the estimate for the serotype 
- beta4_v_s_g[w] ~ dnorm(beta4_s[ts.loop.st.index[w]] , tau.beta4_v_s_g)  
- beta5_v_s_g[w] ~ dnorm(beta5_s[ts.loop.st.index[w]] , tau.beta5_v_s_g) 
+beta1_s_g[w] ~ dnorm(beta1_s[ts.loop.st.index[w]], tau.beta1_s_g) 
+beta2_s_g[w] ~ dnorm(beta2_s[ts.loop.st.index[w]], tau.beta2_s_g) 
+beta3_s_g[w] ~ dnorm(beta3_s[ts.loop.st.index[w]], tau.beta3_s_g) 
+
+amp[w]<- sqrt(beta1_s_g [w]^2 + beta2_s_g [w]^2)
+
+#Vaccine-associated Slope for a serotype in a particular PCV group is centered around the estimate for the serotype 
+beta4_v_s_g[w] ~ dnorm(beta4_v[ts.loop.pcv.index[w]] + beta4_s[ts.loop.st.index[w]] +beta4_v_g[ts.loop.pcv.index[w],ts.loop.cm.age.index[w]], tau.beta4_v_s_g)  
+beta5_v_s_g[w] ~ dnorm(beta5_v[ts.loop.pcv.index[w]] + beta5_s[ts.loop.st.index[w]] +beta5_v_g[ts.loop.pcv.index[w],ts.loop.cm.age.index[w]], tau.beta5_v_s_g) 
+
+# log.rr.last.yr.vsg[w]<- beta4_v_s_g[w]*10 + beta5_v_s_g[w]*7  #do this to see if como of b4 and b5 is identifiable 
+
 }
 
 #Serotype-level loop
@@ -35,8 +158,8 @@ alpha_s [z]~  dnorm(0, tau.alpha_s)
 beta1_s[z]~dnorm(0,tau.beta1_s)
 beta2_s[z]~dnorm(0,tau.beta2_s)
 beta3_s[z]~dnorm(0,tau.beta3_s)
-beta4_s[z]~dnorm(beta4_v[st.loop.pcv.index[z]],tau.beta4_s)
-beta5_s[z]~dnorm(beta5_v[st.loop.pcv.index[z]],tau.beta5_s)
+beta4_s[z]~dnorm(0,tau.beta4_s)
+beta5_s[z]~dnorm(0,tau.beta5_s)
 period[z]~ dnorm(6.5,1e-5)T(3,10) 
 }
 
@@ -49,12 +172,24 @@ for(x in 1:3){
 beta4_v[x]~dnorm(0, 1e-5)
 beta5_v[x]~dnorm(0, 1e-5)
 }
+
+#This is an effect of risk group that varies  by PCV type--shrinks to 0
+for(xx in 1:n.risk){
+for(x in 1:3){  
+beta4_v_g[x,xx]~dnorm(0, tau.beta4_v_g)
+beta5_v_g[x,xx]~dnorm(0, tau.beta5_v_g)
+}
+}
+
 ########################################################
 ###Hyperpriors for observation-level model 
+
 alpha~dnorm(0,1e-5)
+
+#SD for dispersion varies for each time series
 sd.disp~dunif(0,100)
 tau.disp <-1/sd.disp^2
-#hyperpriors for time-series-level loop
+
 sd.beta4_v_s_g ~dunif(0,100)
 tau.beta4_v_s_g <-1/ sd.beta4_v_s_g^2
 sd.beta5_v_s_g ~dunif(0,100)
@@ -67,6 +202,12 @@ sd.beta2_s_g~dunif(0,100)
 tau.beta2_s_g<-1/sd.beta2_s_g^2
 sd.beta3_s_g~dunif(0,100)
 tau.beta3_s_g<-1/sd.beta3_s_g^2
+
+tau.beta4_v_g<-1/sd.beta4_v_g^2
+sd.beta4_v_g~dunif(0,100)
+tau.beta5_v_g<-1/sd.beta5_v_g^2
+sd.beta5_v_g~dunif(0,100)
+
 sd.alpha_s_g ~dunif(0,100)
 tau.alpha_s_g<-1/sd.alpha_s_g^2
 
@@ -74,8 +215,8 @@ tau.alpha_s_g<-1/sd.alpha_s_g^2
 sd.alpha_g~dunif(0,100)
 tau.alpha_g<-1/sd.alpha_g^2
 
-###Hyperpriors for ST-level loop loops
-tau.ave.period<-1/sd.ave.period^2
+###Hyperpriors for ST loops
+
 sd.beta1_s~dunif(0,100)
 tau.beta1_s<-1/sd.beta1_s^2
 sd.beta2_s~dunif(0,100)
@@ -86,8 +227,1131 @@ sd.b4_s~dunif(0,100)
 tau.beta4_s<-1/sd.b4_s^2
 sd.b5_s~dunif(0,100)
 tau.beta5_s<-1/sd.b5_s^2
+sd.overall.int~dunif(0,100)
+tau.overall.int<- 1/ sd.overall.int^2 
 sd.alpha_s~dunif(0,100)
 tau.alpha_s<-1/sd.alpha_s^2
 ####################################################################
 }
 "
+jdat3 <- list(N=length(d1$ipdN), offset=d1$offset, 
+               t1=t1,
+              t2=t2,
+              t3=t3,
+              epiyrN=epiyrN, 
+              ipdN=d1$ipdN,
+              obs.st.cm.age.indx=d1$obs.st.cm.age.indx, 
+              obs.st.indx=d1$obs.st.indx,
+              obs.pcvgrp.indx=d1$obs.pcvgrp.indx,
+              ts.loop.st.index=unique.st.cm.age.indx.SORTED[,2],
+              ts.loop.cm.age.index=unique.st.cm.age.indx.SORTED[,3],
+              ts.loop.pcv.index=unique.st.cm.age.indx.SORTED[,4],
+              st.loop.pcv.index=unique.st.indx[,2],
+              Nstcmagecombos=nrow(unique.st.cm.age.indx.SORTED),
+              Nsts=nrow(unique.st.indx),
+              n.risk=length(unique.cm.age.indx) )
+jmod3 <- jags.model(textConnection(jcode3), data=jdat3, n.chains=2, n.adapt=1000)
+update(jmod3,5000)
+jpos3 <- coda.samples(jmod3, c("period",'ave.period', "beta4_v_s_g", "beta5_v_s_g",'sd.beta4_v_s_g',
+                               'sd.beta5_v_s_g','beta1_s_g','beta2_s_g','beta1_s', 'beta2_s' ,'beta4_v','beta5_v','alpha_s','alpha_s_g',
+                               'beta4_s','beta5_s','beta3_s','beta3_s_g', 'sd.b4_s','beta4_v_g','beta5_v_g', 'sd.b5_s','disp','alpha_s_g_ctr','log.rr.last.yr.st'
+                               ,'log.rr.last.yr.vsg','sd.beta4_v_g','sd.beta5_v_g'), n.iter=iterations, thin=1)
+dic.mod2 <- dic.samples(jmod3, 1000, "pD")
+saveRDS(dic.mod2,file="C:\\Users\\DMW63\\Desktop\\My documents h\\SSI\\polished\\long-term dynamics\\Comorbid v1\\Model Comparisons\\V13\\dic.rds")
+
+
+geweke1<-geweke.diag(jpos3)
+#hist(geweke1[[1]][[1]])
+#hist(geweke1[[1]][[1]][grep("alpha", names(geweke1[[1]][[1]]))]) #all  alpha
+
+#hist(geweke1[[1]][[1]][grep("beta1", names(geweke1[[1]][[1]]))]) #all  beta1_s
+#hist(geweke1[[1]][[1]][grep("beta2", names(geweke1[[1]][[1]]))]) #all  beta2_s
+#hist(geweke1[[1]][[1]][grep("beta3", names(geweke1[[1]][[1]]))]) #all beta3
+# hist(geweke1[[1]][[1]][grep("beta4", names(geweke1[[1]][[1]]))]) #all beta4
+# hist(geweke1[[1]][[1]][grep("beta5", names(geweke1[[1]][[1]]))]) #all beta5
+# hist(geweke1[[1]][[1]][grep("period", names(geweke1[[1]][[1]]))])
+# hist(geweke1[[1]][[1]][grep("vaccine_effect", names(geweke1[[1]][[1]]))])
+saveRDS( geweke1, "C:\\Users\\DMW63\\Desktop\\My documents h\\SSI\\polished\\long-term dynamics\\Comorbid v1\\Model Comparisons\\V13\\geweke1.rds")
+#geweke1<-readRDS("C:\\Users\\DMW63\\Desktop\\My documents h\\SSI\\polished\\long-term dynamics\\Comorbid v1\\Model Comparisons\\V13\\geweke1.rds")
+# plot(jpos3, ask=TRUE)
+# for(k in 1:10){plot(jpos3[[1]][,'vaccine_effect[k]'])}
+
+
+#SAVE THE MCMC OUTPUT
+saveRDS(jpos3,file="C:\\Users\\DMW63\\Desktop\\My documents h\\SSI\\polished\\long-term dynamics\\Comorbid v1\\Model Comparisons\\V13\\jags_est_cm v3_offset.rds")
+#jpos3<-readRDS("C:\\Users\\DMW63\\Desktop\\My documents h\\SSI\\polished\\long-term dynamics\\Comorbid v1\\Model Comparisons\\V13\\jags_est_cm v3_offset.rds")
+str(jpos3) #rows correspond to MCMC iterations, columns to parameters
+jpos.samp<-rbind(jpos3[[1]],jpos3[[2]])
+jpos.samp<-jpos.samp[sample(nrow(jpos.samp),2000),]
+summary.mcmc.regression <-summary(jpos3)
+
+#Estimates of SD for the Serotype level or serotype/CM level
+summary.mcmc.regression[[2]][grep("sd.b5_s", row.names(summary.mcmc.regression[[2]])), ]
+summary.mcmc.regression[[2]][grep("sd.beta5_v_s_g", row.names(summary.mcmc.regression[[2]])), ]
+
+summary.mcmc.regression[[2]][grep("sd.b4_s", row.names(summary.mcmc.regression[[2]])), ]
+summary.mcmc.regression[[2]][grep("sd.beta4_v_s_g", row.names(summary.mcmc.regression[[2]])), ]
+
+#summary.mcmc.regression
+pred.ipd.quantiles <-as.data.frame(summary.mcmc.regression[[2]])
+# plot(jpos3[[2]][,'pred.mean[20]'],ask=TRUE)
+# for(i in 1:length(unique(d1$st))){
+#   select<-paste('period[',i,']',sep="")
+#   plot(jpos3[[2]][,select],ask=TRUE)
+#   title(main=unique.st.cm.age.indx.SORTED)
+# }
+#Beta2 trace plots--beta1 all looks good
+for(i in 1:length(unique(d1$st))){
+  select<-paste( 'beta4_s[' ,i, ']',sep="")
+  plot(jpos3[[1]][,select],ask=TRUE)
+  title(main=unique(d1$st)[i])
+}
+plot(jpos3[[1]][,'beta5_v[2]'],ask=TRUE)
+plot(jpos3[[1]][,'beta4_v[2]'] + jpos3[[1]][,'beta5_v[2]']) #Combination of beta4 and beta 5---beautifully mixed
+plot(jpos3[[1]][,'beta4_v[1]'] + jpos3[[1]][,'beta5_v[1]']) #Combination of beta4 and beta 5---beautifully mixed
+plot(jpos3[[1]][,'beta4_v[3]'] + jpos3[[1]][,'beta5_v[3]']) #Combination of beta4 and beta 5---beautifully mixed
+plot(jpos3[[1]][,'beta4_v_s_g[2]'] + jpos3[[1]][,'beta5_v_s_g[2]']) #Combination of beta4 and beta 5---beautifully mixed
+
+plot(jpos3[[1]][,'beta4_s[12]'],ask=TRUE)
+
+plot(jpos3[[2]][,'beta5_v_s_g[1]'],ask=TRUE)
+plot(jpos3[[2]][,'gamma1'],ask=TRUE)
+
+plot(jpos3[[2]][,'beta4_v_s_g[1]'],ask=TRUE)
+plot(jpos3[[2]][,'log.lambda[1]'],ask=TRUE)
+plot(jpos3[[2]][,'log.lambda.novax[1]'],ask=TRUE)
+
+#CATERPILLAR PLOTS
+par(mfrow=c(1,1))
+#cater.label<-  unique.st.indx$`d1$st`[order(sum.post$quantiles[,3][2:55], decreasing = TRUE)])
+caterplot(mcmcout=jpos3, parms="beta4_s")
+caterplot(mcmcout=jpos3, parms="beta5_s")
+
+####################################
+# PLOT OBSERVED VS EXPECTED
+
+#combined.results.mcmc<- rbind(jpos3[[1]], jpos3[[2]])
+combined.results.mcmc<- rbind(jpos3[[1]] ,jpos3[[2]] )
+samplesN<-sample(1:nrow(combined.results.mcmc),2000)
+samplesN<-sort(samplesN)
+combined.results.mcmc<-combined.results.mcmc[sample(nrow(combined.results.mcmc), 2000),] #take a random set of 2K MCMC draws
+
+mcmc.labels<-colnames(combined.results.mcmc)
+t.countfact<- epiyrN/12
+obs.st.indx<-d1$obs.st.indx
+obs.st.cm.age.indx<-d1$obs.st.cm.age.indx
+pcv7.spl<-d1$pcv7.spl
+pcv13.spl<-d1$pcv13.spl
+log.lambda<-matrix(nrow=nrow(d1), ncol=nrow(combined.results.mcmc))
+log.lambda.novax<-matrix(nrow=nrow(d1), ncol=nrow(combined.results.mcmc))
+log.lambda.quant<-matrix(nrow=nrow(d1), ncol=3)
+log.lambda.novax.quant<-matrix(nrow=nrow(d1), ncol=3)
+alpha_s_g<- combined.results.mcmc[,grep("alpha_s_g[", mcmc.labels, fixed=TRUE)]
+beta1_s_g<- combined.results.mcmc[,grep("beta1_s_g[", mcmc.labels, fixed=TRUE)]
+beta2_s_g<- combined.results.mcmc[,grep("beta2_s_g[", mcmc.labels, fixed=TRUE)]
+beta3_s_g<- combined.results.mcmc[,grep("beta3_s_g[", mcmc.labels, fixed=TRUE)]
+beta4_s<- combined.results.mcmc[,grep("beta4_s[", mcmc.labels, fixed=TRUE)]
+beta5_s<- combined.results.mcmc[,grep("beta5_s[", mcmc.labels, fixed=TRUE)]
+beta4_v_s_g<- combined.results.mcmc[,grep("beta4_v_s_g[", mcmc.labels, fixed=TRUE)]
+beta5_v_s_g<- combined.results.mcmc[,grep("beta5_v_s_g[", mcmc.labels, fixed=TRUE)]
+log.rr.last.yr.st<- beta4_s*t2[20] + beta5_s*t3[20]  #do this to see if como of b4 and b5 is identifiable 
+#Trace plots of combined effect of beta4_s and beta5_s
+#for(i in 1:ncol(log.rr.last.yr.st)){plot(log.rr.last.yr.st[,i], type='l');title(unique.st.indx[i,3])}
+
+#Examine vatiations in the reate ratios by risk group
+log.rr.last.yr.st_vsg<- beta4_v_s_g*t2[20] + beta5_v_s_g*t3[20]  #do this to see if como of b4 and b5 is identifiable 
+log.rr.last.yr.st_vsg.Q<-t(apply(log.rr.last.yr.st_vsg,2,quantile, probs=c(0.25,0.5,0.975) ))
+rr.2014.q<-exp(log.rr.last.yr.st_vsg.Q)
+rr.2014.q<-cbind.data.frame(rr.2014.q,unique.st.cm.age.indx.SORTED)
+rr.2014.q<-rr.2014.q[order(rr.2014.q$`d1$obs.pcvgrp.indx`),]
+rr.2014.q$st.index<-rr.2014.q$`d1$obs.st.indx` + as.numeric(rr.2014.q$`d1$agegrp`)/8- 1/8 + as.numeric(rr.2014.q$`d1$cmlevel`)/16 -1/16
+for(i in 1:3){
+  rr.2014.vt<-rr.2014.q[rr.2014.q$`d1$obs.pcvgrp.indx`==i,]
+  plot(rr.2014.vt$st.index, log(rr.2014.vt$`50%`), type='p', pch=as.numeric(rr.2014.q$`d1$agegrp`), col=rr.2014.q$`d1$cmlevel`)  
+  text(rr.2014.vt$st.index[rr.2014.vt$`d1$cmlevel`==1 &rr.2014.vt$`d1$agegrp`==5], log(rr.2014.vt$`50%`[rr.2014.vt$`d1$cmlevel`==0 &rr.2014.vt$`d1$agegrp`==1])+0.5, rr.2014.vt$`d1$st`[rr.2014.vt$`d1$cmlevel`==0 &rr.2014.vt$`d1$agegrp`==1])
+}
+
+
+log.rr.2009<- beta4_v_s_g*t2[15]
+log.rr.2009.Q<-t(apply(log.rr.2009,2,quantile, probs=c(0.25,0.5,0.975) ))
+rr.2009.q<-cbind.data.frame(unique.st.cm.age.indx.SORTED,exp(log.rr.2009.Q))
+plot(rr.2009.q$`d1$st`, rr.2009.q$`50%`, type='p')  
+
+
+#Trace plots of combined effect of beta4_s and beta5_s
+#for(i in 1:20){plot(log.rr.last.yr.st_vsg[,i], type='l')}
+#for(i in 1:20){plot(log.rr.2009[,i], type='l')}
+
+
+disp<-combined.results.mcmc[,grep("disp[", mcmc.labels, fixed=TRUE)]
+offset<-d1$offset
+period<-combined.results.mcmc[,grep("period[", mcmc.labels, fixed=TRUE)]
+#
+which(d1$st=='10F' & d1$agec==1 &d1$cmlevel==0)
+for(i in 547:567){plot(disp[,i]);title(i)}
+#for(i in 1:nrow(d1)){ 
+for(i in 1:nrow(d1)){ 
+  log.lambda[i,] <- (log(offset[i]) + alpha_s_g[,obs.st.cm.age.indx[i]]  
+                     + beta1_s_g[,obs.st.cm.age.indx[i]]*cos(2*3.14159*epiyrN[i]/period[,obs.st.indx[i]] ) 
+                     + beta2_s_g[,obs.st.cm.age.indx[i]]*sin(2*3.14159*epiyrN[i]/period[,obs.st.indx[i]] ) 
+                     + beta3_s_g[,obs.st.cm.age.indx[i]]*t1[i]   #secular trend
+                     +beta4_v_s_g[,obs.st.cm.age.indx[i]]*t2[i]  #PCV7-associated change
+                     +beta5_v_s_g[,obs.st.cm.age.indx[i]]*t3[i]  #PCV13-associated change
+                     + disp[,i] )
+  
+  #counterfactual
+  log.lambda.novax[i,]<- (log(offset[i]) + alpha_s_g[,obs.st.cm.age.indx[i]] 
+                          + beta1_s_g[,obs.st.cm.age.indx[i]]*cos(2*3.14159*epiyrN[i]/period[,obs.st.indx[i]] ) 
+                          + beta2_s_g[,obs.st.cm.age.indx[i]]*sin(2*3.14159*epiyrN[i]/period[,obs.st.indx[i]] ) 
+                          + beta3_s_g[,obs.st.cm.age.indx[i]]*t.countfact[i]  #for counterfactual, assume trend continued
+                          + disp[,i])
+  log.lambda.quant[i,]<-quantile(log.lambda[i,],probs=c(0.025,0.5,0.975))
+  log.lambda.novax.quant[i,]<-quantile(log.lambda.novax[i,],probs=c(0.025,0.5,0.975))
+}
+#disp.summary<-colMeans()
+
+expected.cases.quant<- exp(log.lambda.quant)
+colnames(expected.cases.quant)<-c('2.5%','50%','97.5%')
+expected.cases.quant<-cbind.data.frame(d1[,c('obs.st.cm.age.indx','st','agegrp','cmlevel','pcvgrp','epiyr')], expected.cases.quant)
+expected.cases.novax.quant<-exp(log.lambda.novax.quant) 
+colnames(expected.cases.novax.quant)<-c('2.5%','50%','97.5%')
+expected.cases.novax.quant<-cbind.data.frame(d1[,c('obs.st.cm.age.indx','st','agegrp','cmlevel','pcvgrp','epiyr')],expected.cases.novax.quant)
+
+pdf(file="C:\\Users\\DMW63\\Desktop\\My documents h\\SSI\\polished\\long-term dynamics\\Comorbid v1\\Model Comparisons\\V13\\plots2.pdf")
+st.cm.age<-paste(expected.cases.quant$st, expected.cases.quant$cmlevel, expected.cases.quant$agegrp, sep="_")
+pred.ipd.split<-split(expected.cases.quant,expected.cases.quant$obs.st.cm.age.indx)
+pred.novax.split<-split(expected.cases.novax.quant,expected.cases.novax.quant$obs.st.cm.age.indx)
+for( i in 1:length(pred.ipd.split)){
+  ymin<-0
+  ymax<-max(pred.ipd.split[[i]][,c('2.5%','97.5%','50%')],pred.novax.split[[i]][,c('2.5%','97.5%','50%')], d1[d1$obs.st.cm.age.indx==i,'ipdN'])
+  plot( 1994:2014,pred.ipd.split[[i]][,'50%'], type="l", col="black", ylim=c(ymin, ymax), bty="l")
+  points( 1994:2014,d1[d1$obs.st.cm.age.indx==i,'ipdN'], type="p")
+  points( 1994:2014,(pred.novax.split[[i]][,'50%']), type="l", col="red")
+  points( 1994:2014,(pred.novax.split[[i]][,'2.5%']), type="l",lty=2, col="red")
+  points( 1994:2014,pred.novax.split[[i]][,'97.5%'], type="l",lty=3, col="red")
+  title(main=paste("Age group", unique.st.cm.age.indx.SORTED[i,c(7)],"CM", unique.st.cm.age.indx.SORTED[i,c(6)],unique.st.cm.age.indx.SORTED[i,5], sep="_" ))
+  abline(v=c(2006.5,2009.5),lty=2, col="grey")
+}
+dev.off()
+#write.csv(cases.prevented.quant.st, "C:\\Users\\DMW63\\Desktop\\My documents h\\SSI\\polished\\long-term dynamics\\Comorbid v1\\Model Comparisons\\V13\\cases_prevented_st_all_groups.csv")
+#cases.prevented.quant.st[cases.prevented.quant.st$st=='14',]
+###############################################################################
+#############################
+
+
+
+#################################################################################################################################
+#################################################################################################################################
+#################################################################################################################################
+#################################################################################################################################
+#################################################################################################################################
+#################################################################################################################################
+#################################################################################################################################
+#################################################################################################################################
+#MULTIPANEL PLOT SHOWING DIFFERENT AGGREGATIONS OF INCIDENCE ACROSS VT/NVT AND AGE
+########################################################
+########################################################
+
+#PLOT OBSERVED VS EXPECTED BY VT/NVT  AND age (panel A)
+#counterfactual values
+offset1<-unique(cbind.data.frame(d1$agegrp,d1$cmlevel, d1$epiyr, d1$offset))
+names(offset1)<-c('agegrp','cmlevel','epiyr','offset2')
+pop94<-offset1[offset1$epiyr==2000,]
+pop94$prop94<- pop94$offset2/sum(pop94$offset2)
+pop94<-pop94[,c('agegrp','cmlevel','prop94')]
+offset3<-unique( d1[,c('agegrp','cmlevel','epiyr','offset')])
+
+counterfact0<-cbind.data.frame(d1$pcvgrp,d1$agegrp,d1$cmlevel, d1$epiyr,exp(log.lambda.novax))
+names(counterfact0)[1:4]<-c('pcvgrp','agegrp','cmlevel','epiyr')
+counterfact0a<-merge(pop94,counterfact0, by=c('agegrp','cmlevel'))
+counterfact0a<-merge(offset3,counterfact0a, by=c('agegrp','cmlevel','epiyr'))
+counterfact0a[,7:ncol(counterfact0a)]<-counterfact0a[,7:ncol(counterfact0a)]/counterfact0a$offset*counterfact0a$prop94# age adjustment
+counterfact1a<-aggregate( .~  pcvgrp+ agegrp+epiyr, FUN=sum,data=counterfact0a[,-c(2,4,5)])
+counterfact1<- as.data.frame(t(apply(counterfact1a[,-c(1:3)],1, quantile, probs=c(0.025,0.5,0.975))))
+counterfact1$pcvgrp<-counterfact1a$pcvgrp
+counterfact1$epiyr<-counterfact1a$epiyr
+counterfact1$agegrp<-counterfact1a$agegrp
+
+#fitted values  z
+fitted0<-cbind.data.frame(d1$pcvgrp,d1$agegrp,d1$cmlevel, d1$epiyr,exp(log.lambda))
+names(fitted0)[1:4]<-c('pcvgrp','agegrp','cmlevel','epiyr')
+fitted0a<-merge(pop94,fitted0, by=c('agegrp','cmlevel'))
+fitted0a<-merge(offset3,fitted0a, by=c('agegrp','cmlevel','epiyr'))
+fitted0a[,7:ncol(fitted0a)]<-fitted0a[,7:ncol(fitted0a)]/fitted0a$offset*fitted0a$prop94# age adjustment
+fitted1a<-aggregate( .~  pcvgrp+ agegrp+epiyr, FUN=sum,data=fitted0a[,-c(2,4,5)])
+fitted1<- as.data.frame(t(apply(fitted1a[,-c(1:3)],1, quantile, probs=c(0.025,0.5,0.975))))
+fitted1$pcvgrp<-fitted1a$pcvgrp
+fitted1$epiyr<-fitted1a$epiyr
+fitted1$agegrp<-fitted1a$agegrp
+
+pop94<-offset1[offset1$epiyr==2000,]
+pop94$prop94<- pop94$offset2/sum(pop94$offset2)
+pop94<-pop94[,c('agegrp','cmlevel','prop94')]
+obs.agg<-cbind.data.frame(d1$pcvgrp, d1$agegrp,d1$cmlevel, d1$epiyr,d1$ipdN)
+names(obs.agg)[1:5]<-c('pcvgrp','agegrp', 'cmlevel','epiyr','ipdN')
+obs.agg2a<-aggregate( .~  pcvgrp+agegrp+cmlevel+ epiyr, FUN=sum,data=obs.agg)
+obs.agg2<-merge(obs.agg2a,offset1, by=c('agegrp','cmlevel','epiyr'))
+obs.agg3<-merge(obs.agg2, pop94, by=c('agegrp','cmlevel'))
+
+obs.agg3$obs.age.std.r<- obs.agg3$ipdN/obs.agg3$offset2*obs.agg3$prop94
+obs.agg4<-aggregate( .~  agegrp+ pcvgrp+ epiyr, FUN=sum,data=obs.agg3)
+obs.agg4<-obs.agg4[order(obs.agg4$pcvgrp, obs.agg4$epiyr),]
+panelA<-list( fitted1,counterfact1, obs.agg4)
+##############################
+###PLOT OBSERVED VS EXPECTED BY VT/NVT (panel B)
+#get age standarized rates--standardize to 1994 population
+pop94<-offset1[offset1$epiyr==2000,]
+pop94$prop94<- pop94$offset2/sum(pop94$offset2)
+pop94<-pop94[,c('agegrp','cmlevel','prop94')]
+obs.agg<-cbind.data.frame(d1$pcvgrp, d1$agegrp,d1$cmlevel, d1$epiyr,d1$ipdN)
+names(obs.agg)[1:5]<-c('pcvgrp','agegrp', 'cmlevel','epiyr','ipdN')
+obs.agg2a<-aggregate( .~  pcvgrp+agegrp+cmlevel+ epiyr, FUN=sum,data=obs.agg)
+obs.agg2<-merge(obs.agg2a,offset1, by=c('agegrp','cmlevel','epiyr'))
+
+obs.agg3<-merge(obs.agg2, pop94, by=c('agegrp','cmlevel'))
+obs.agg3$obs.age.std.r<- obs.agg3$ipdN/obs.agg3$offset2*obs.agg3$prop94
+obs.agg4<-aggregate( .~  pcvgrp+ epiyr, FUN=sum,data=obs.agg3)
+obs.agg4<-obs.agg4[order(obs.agg4$pcvgrp, obs.agg4$epiyr),]
+
+offset3<-unique( d1[,c('agegrp','cmlevel','epiyr','offset')])
+counterfact0a<-merge(offset3,counterfact0, by=c('agegrp','cmlevel','epiyr'))
+counterfact0a<-merge(pop94,counterfact0a, by=c('agegrp','cmlevel'))
+counterfact0a<-counterfact0a[order(counterfact0a$agegrp,counterfact0a$cmlevel,counterfact0a$epiyr,counterfact0a$pcvgrp),]
+counterfact0a[,7:ncol(counterfact0a)]<-counterfact0a[,7:ncol(counterfact0a)]/counterfact0a$offset*counterfact0a$prop94# age adjustment
+counterfact1a<-aggregate( .~  pcvgrp+epiyr, FUN=sum,data=counterfact0a)
+counterfact1<- as.data.frame(t(apply(counterfact1a[,-c(1:3)],1, quantile, probs=c(0.025,0.5,0.975))))
+counterfact1$pcvgrp<-counterfact1a$pcvgrp
+counterfact1$epiyr<-counterfact1a$epiyr
+names(counterfact1)[4:5]<-c('pcvgrp','epiyr')
+counterfact3<-counterfact1[order(counterfact1$pcvgrp, counterfact1$epiyr),]
+fitted0a<-merge(offset3,fitted0, by=c('agegrp','cmlevel','epiyr'))
+fitted0a<-merge(pop94,fitted0a, by=c('agegrp','cmlevel'))
+fitted0a<-fitted0a[order(fitted0a$agegrp,fitted0a$epiyr,fitted0a$pcvgrp),]
+fitted0a[,7:ncol(fitted0a)]<-fitted0a[,7:ncol(fitted0a)]/fitted0a$offset*fitted0a$prop94# age adjustment
+fitted1a<-aggregate( .~  pcvgrp+epiyr, FUN=sum,data=fitted0a)
+fitted1<- as.data.frame(t(apply(fitted1a[,-c(1:5)],1, quantile, probs=c(0.025,0.5,0.975))))
+fitted1$pcvgrp<-fitted1a$pcvgrp
+fitted1$epiyr<-fitted1a$epiyr
+names(fitted1)[4:5]<-c('pcvgrp','epiyr')
+fitted3<-fitted1[order(fitted1$pcvgrp, fitted1$epiyr),]
+
+panelB<-list(fitted3, counterfact3, obs.agg4)
+
+###PANELC: Aggregate all serotypes, byt age group
+pop94<-offset1[offset1$epiyr==2000,]
+pop94$prop94<- pop94$offset2/sum(pop94$offset2)
+pop94<-pop94[,c('agegrp','cmlevel','prop94')]
+obs.agg<-cbind.data.frame(d1$pcvgrp, d1$agegrp,d1$cmlevel, d1$epiyr,d1$ipdN)
+names(obs.agg)[1:5]<-c('pcvgrp','agegrp', 'cmlevel','epiyr','ipdN')
+obs.agg2a<-aggregate( .~  pcvgrp+agegrp+cmlevel+ epiyr, FUN=sum,data=obs.agg)
+obs.agg2<-merge(obs.agg2a,offset1, by=c('agegrp','cmlevel','epiyr'))
+obs.agg3<-obs.agg2
+obs.agg3$obs.age.std.r<- obs.agg3$ipdN/obs.agg3$offset2
+obs.agg4<-aggregate( .~  agegrp+ epiyr, FUN=sum,data=obs.agg3)
+obs.agg4<-obs.agg4[order(obs.agg4$agegrp, obs.agg4$epiyr),]
+
+offset3<-unique( d1[,c('agegrp','cmlevel','epiyr','offset')])
+counterfact0a<-merge(offset3,counterfact0, by=c('agegrp','cmlevel','epiyr'))
+counterfact0a<-counterfact0a[order(counterfact0a$agegrp,counterfact0a$epiyr,counterfact0a$pcvgrp),]
+counterfact0a[,6:ncol(counterfact0a)]<-counterfact0a[,6:ncol(counterfact0a)]/counterfact0a$offset # age adjustment
+counterfact1a<-aggregate( .~  agegrp+epiyr, FUN=sum,data=counterfact0a[,-c(2,4,5)])
+counterfact1<- as.data.frame(t(apply(counterfact1a[,-c(1:4)],1, quantile, probs=c(0.025,0.5,0.975))))
+counterfact1$agegrp<-counterfact1a$agegrp
+counterfact1$epiyr<-counterfact1a$epiyr
+names(counterfact1)[4:5]<-c('agegrp','epiyr')
+counterfact3<-counterfact1[order(counterfact1$agegrp, counterfact1$epiyr),]
+
+fitted0a<-merge(offset3,fitted0, by=c('agegrp','cmlevel','epiyr'))
+fitted0a<-fitted0a[order(fitted0a$agegrp,fitted0a$epiyr,fitted0a$pcvgrp),]
+fitted0a[,6:ncol(fitted0a)]<-fitted0a[,6:ncol(fitted0a)]/fitted0a$offset # age adjustment
+fitted1a<-aggregate( .~  agegrp+epiyr, FUN=sum,data=fitted0a[,-c(2,4,5)])
+fitted1<- as.data.frame(t(apply(fitted1a[,-c(1:4)],1, quantile, probs=c(0.025,0.5,0.975))))
+fitted1$agegrp<-fitted1a$agegrp
+fitted1$epiyr<-fitted1a$epiyr
+names(fitted1)[4:5]<-c('agegrp','epiyr')
+fitted3<-fitted1[order(fitted1$agegrp, fitted1$epiyr),]
+panelC<-list(fitted3, counterfact3, obs.agg4)
+
+###PanelD: Age standardized rates, aggregate all serotypes and age groups
+#get age standarized rates--standardize to 1994 population
+pop94<-offset1[offset1$epiyr==2000,]
+pop94$prop94<- pop94$offset2/sum(pop94$offset2)
+pop94<-pop94[,c('agegrp','cmlevel','prop94')]
+obs.agg3<-merge(obs.agg2, pop94, by=c('agegrp','cmlevel'))
+obs.agg3$obs.age.std.r<- obs.agg3$ipdN/obs.agg3$offset2*obs.agg3$prop94
+obs.agg4<-aggregate( .~   epiyr, FUN=sum,data=obs.agg3)
+obs.agg4<-obs.agg4[order( obs.agg4$epiyr),]
+
+offset3<-unique( d1[,c('agegrp','cmlevel','epiyr','offset')])
+counterfact0a<-merge(offset3,counterfact0, by=c('agegrp','cmlevel','epiyr'))
+counterfact0a<-merge(pop94,counterfact0a, by=c('agegrp','cmlevel'))
+counterfact0a<-counterfact0a[order(counterfact0a$agegrp,counterfact0a$epiyr,counterfact0a$pcvgrp),]
+counterfact0a[,7:ncol(counterfact0a)]<-counterfact0a[,7:ncol(counterfact0a)]/counterfact0a$offset*counterfact0a$prop94# age adjustment
+counterfact1a<-aggregate( .~  epiyr, FUN=sum,data=counterfact0a)
+counterfact1<- as.data.frame(t(apply(counterfact1a[,-c(1:5)],1, quantile, probs=c(0.025,0.5,0.975))))
+counterfact1$epiyr<-counterfact1a$epiyr
+names(counterfact1)[4]<-c('epiyr')
+counterfact3<-counterfact1[order( counterfact1$epiyr),]
+
+fitted0a<-merge(offset3,fitted0, by=c('agegrp','cmlevel','epiyr'))
+fitted0a<-merge(pop94,fitted0a, by=c('agegrp','cmlevel'))
+fitted0a<-fitted0a[order(fitted0a$agegrp,fitted0a$epiyr,fitted0a$pcvgrp),]
+fitted0a[,7:ncol(fitted0a)]<-fitted0a[,7:ncol(fitted0a)]/fitted0a$offset*fitted0a$prop94# age adjustment
+fitted1a<-aggregate( .~  epiyr, FUN=sum,data=fitted0a)
+fitted1<- as.data.frame(t(apply(fitted1a[,-c(1:5)],1, quantile, probs=c(0.025,0.5,0.975))))
+fitted1$epiyr<-fitted1a$epiyr
+names(fitted1)[4]<-c('epiyr')
+fitted3<-fitted1[order( fitted1$epiyr),]
+panelD<-list(fitted3, counterfact3, obs.agg4)
+
+
+###########Multipanel compilation
+tiff(file="C:\\Users\\DMW63\\Desktop\\My documents h\\SSI\\polished\\long-term dynamics\\Comorbid v1\\Model Comparisons\\V13\\plots3_VT_NVT_age MULTIPANEL.tiff", width=848, height=1114, units='px',res=150)
+par( mar=c(1,2,3,1), oma=c(1,2,1,1))
+mat=matrix(c(1,4,7,10,13,16,2,5,8,11,14,17,3,6,9,12,15,18,19,20,21,22,23,24),ncol=4,nrow=6)
+layout(mat, widths=rep(1, 6), heights=rep(1, 4))
+age.labels<-c('<5y','5-17y', '18-39y','40-64y','65+y')
+
+#PanelA
+fitted1<-panelA[[1]]
+counterfact1<-panelA[[2]]
+obs.agg2<-panelA[[3]]
+fitted1<-fitted1[order(fitted1$agegrp, fitted1$pcvgrp, fitted1$epiyr),]
+counterfact1<-counterfact1[order(counterfact1$agegrp, counterfact1$pcvgrp, counterfact1$epiyr),]
+obs.agg2<-obs.agg2[order(obs.agg2$agegrp, obs.agg2$pcvgrp, obs.agg2$epiyr),]
+
+for(j in 1:5){
+#  ylim.select<-range(cbind(counterfact1[ obs.agg2$agegrp==j,c('2.5%','50%','97.5%')]/obs.agg2$offset2[obs.agg2$agegrp==j],obs.agg2[obs.agg2$agegrp==j,'obs.age.std.r']))
+  ylim.select<-range(cbind(counterfact1[ obs.agg2$agegrp==j,c('2.5%','50%','97.5%')],obs.agg2[obs.agg2$agegrp==j,'obs.age.std.r']))
+  
+   for(i in 1:3){
+    #plot(obs.agg2[obs.agg2$pcvgrp==i & obs.agg2$agegrp==j,'epiyr'],obs.agg2[obs.agg2$pcvgrp==i & obs.agg2$agegrp==j,'ipdN']/obs.agg2[obs.agg2$pcvgrp==i & obs.agg2$agegrp==j,'offset2'], ylim=c(0,ylim.select[2]), bty='l')
+    plot(obs.agg2[obs.agg2$pcvgrp==i & obs.agg2$agegrp==j,'epiyr'],obs.agg2[obs.agg2$pcvgrp==i & obs.agg2$agegrp==j,'obs.age.std.r'], ylim=c(0,ylim.select[2]), bty='l')
+    
+      if(i==1){title(age.labels[j])}
+    abline(v=c(2006.5, 2009.5), lty=2, col='gray')
+    matplot(obs.agg2[obs.agg2$pcvgrp==i& obs.agg2$agegrp==j,'epiyr'],counterfact1[counterfact1$pcvgrp==i & obs.agg2$agegrp==j,c('2.5%','50%','97.5%')], col='red', type='l', lty=c(2,1,2), add=TRUE)
+    matplot(obs.agg2[obs.agg2$pcvgrp==i& obs.agg2$agegrp==j,'epiyr'],fitted1[fitted1$pcvgrp==i& obs.agg2$agegrp==j,c('2.5%','50%','97.5%')], col='black', type='l',lwd=0.5, lty=c(2,1,2), add=TRUE)
+  }}
+
+#PanelB
+fitted3<-panelB[[1]]
+counterfact3<-panelB[[2]]
+obs.agg4<-panelB[[3]]
+ylim.select<-range(cbind(counterfact3[ c('2.5%','50%','97.5%')],obs.agg4['obs.age.std.r']))
+for(i in 1:3){
+  plot(obs.agg4[obs.agg4$pcvgrp==i ,'epiyr'],obs.agg4[obs.agg4$pcvgrp==i ,'obs.age.std.r'], ylim=c(0,ylim.select[2]), bty='l')
+  if(i==1){title("All Ages")}
+  abline(v=c(2006.5, 2009.5), lty=2, col='gray')
+  matplot(obs.agg4[obs.agg4$pcvgrp==i,'epiyr'],counterfact3[counterfact3$pcvgrp==i ,c('2.5%','50%','97.5%')], col='red', type='l', lty=c(2,1,2), add=TRUE)
+  matplot(obs.agg4[obs.agg4$pcvgrp==i,'epiyr'],fitted3[fitted3$pcvgrp==i,c('2.5%','50%','97.5%')], col='black', type='l',lwd=0.5, lty=c(2,1,2), add=TRUE)
+}
+#PanelC
+fitted3<-panelC[[1]]
+counterfact3<-panelC[[2]]
+obs.agg4<-panelC[[3]]
+age.labels<-c('<5y','5-17y', '18-39y','40-64y','65+y')
+for(i in 1:5){
+  ylim.select<-range(cbind(counterfact3[counterfact3$agegrp==i , c('2.5%','50%','97.5%')],obs.agg4[obs.agg4$agegrp==i ,'obs.age.std.r']))
+  
+  plot(obs.agg4[obs.agg4$agegrp==i ,'epiyr'],obs.agg4[obs.agg4$agegrp==i ,'obs.age.std.r'], ylim=c(0,ylim.select[2]), bty='l')
+  # title(age.labels[i])
+  abline(v=c(2006.5, 2009.5), lty=2, col='gray')
+  matplot(obs.agg4[obs.agg4$agegrp==i,'epiyr'],counterfact3[counterfact3$agegrp==i ,c('2.5%','50%','97.5%')], col='red', type='l', lty=c(2,1,2), add=TRUE)
+  matplot(obs.agg4[obs.agg4$agegrp==i,'epiyr'],fitted3[fitted3$agegrp==i,c('2.5%','50%','97.5%')], col='black', type='l',lwd=0.5, lty=c(2,1,2), add=TRUE)
+}
+#Panel D
+fitted3<-panelD[[1]]
+counterfact3<-panelD[[2]]
+obs.agg4<-panelD[[3]]
+ylim.select<-range(cbind(counterfact3[ c('2.5%','50%','97.5%')],obs.agg4['obs.age.std.r']))
+plot(obs.agg4[,'epiyr'],obs.agg4[,'obs.age.std.r'], ylim=c(0,ylim.select[2]), bty='l')
+abline(v=c(2006.5, 2009.5), lty=2, col='gray')
+matplot(obs.agg4[,'epiyr'],counterfact3[ ,c('2.5%','50%','97.5%')], col='red', type='l', lty=c(2,1,2), add=TRUE)
+matplot(obs.agg4[,'epiyr'],fitted3[,c('2.5%','50%','97.5%')], col='black', type='l',lwd=0.5, lty=c(2,1,2), add=TRUE)
+
+dev.off()
+
+
+#JUST B AND D
+
+###########Multipanel compilation
+tiff(file="C:\\Users\\DMW63\\Desktop\\My documents h\\SSI\\polished\\long-term dynamics\\Comorbid v1\\Model Comparisons\\V13\\plots3_VT_NVT_age MULTIPANEL aggregated only.tiff", width=848, height=200, units='px',res=150)
+titles<-c('PCV7 Serotypes', '+PCV13 serotypes', 'Non-PCV serotypes', "All IPD")
+par( mar=c(1,2,1,1), oma=c(1,2,1,1), mfrow=c(1,4))
+#PanelB
+fitted3<-panelB[[1]]
+counterfact3<-panelB[[2]]
+obs.agg4<-panelB[[3]]
+ylim.select<-range(cbind(counterfact3[ c('2.5%','50%','97.5%')],obs.agg4['obs.age.std.r']))
+for(i in 1:3){
+  plot(obs.agg4[obs.agg4$pcvgrp==i ,'epiyr'],obs.agg4[obs.agg4$pcvgrp==i ,'obs.age.std.r'], ylim=c(0,ylim.select[2]), bty='l')
+  title(titles[i], cex.main=0.75)
+  abline(v=c(2006.5, 2009.5), lty=2, col='gray')
+  matplot(obs.agg4[obs.agg4$pcvgrp==i,'epiyr'],counterfact3[counterfact3$pcvgrp==i ,c('2.5%','50%','97.5%')], col='red', type='l', lty=c(2,1,2), add=TRUE)
+  matplot(obs.agg4[obs.agg4$pcvgrp==i,'epiyr'],fitted3[fitted3$pcvgrp==i,c('2.5%','50%','97.5%')], col='black', type='l',lwd=0.5, lty=c(2,1,2), add=TRUE)
+}
+#Panel D
+fitted3<-panelD[[1]]
+counterfact3<-panelD[[2]]
+obs.agg4<-panelD[[3]]
+ylim.select<-range(cbind(counterfact3[ c('2.5%','50%','97.5%')],obs.agg4['obs.age.std.r']))
+plot(obs.agg4[,'epiyr'],obs.agg4[,'obs.age.std.r'], ylim=c(0,ylim.select[2]), bty='l')
+abline(v=c(2006.5, 2009.5), lty=2, col='gray')
+title(titles[4], cex.main=0.75)
+matplot(obs.agg4[,'epiyr'],counterfact3[ ,c('2.5%','50%','97.5%')], col='red', type='l', lty=c(2,1,2), add=TRUE)
+matplot(obs.agg4[,'epiyr'],fitted3[,c('2.5%','50%','97.5%')], col='black', type='l',lwd=0.5, lty=c(2,1,2), add=TRUE)
+
+dev.off()
+
+
+save.panels<-list(panelA,panelB,panelC,panelD)
+saveRDS( save.panels, "C:\\Users\\DMW63\\Desktop\\My documents h\\SSI\\polished\\long-term dynamics\\Comorbid v1\\Model Comparisons\\V13\\plot.panels.rds")
+
+#################################################################################################################################
+#################################################################################################################################
+#################################################################################################################################
+#################################################################################################################################
+#################################################################################################################################
+#################################################################################################################################
+#################################################################################################################################
+#################################################################################################################################
+
+
+#################################################################################################################################
+#################################################################################################################################
+#################################################################################################################################
+#################################################################################################################################
+#################################################################################################################################
+#################################################################################################################################
+#################################################################################################################################
+#################################################################################################################################
+################################
+###############
+##FIGURE SX FOR PAPER: RR IN 2014/15 BY RISK GROUP
+#Rate ratio for each strata and time point
+#log.lambda<- rbind( jpos3[[1]][,grep("log.lambda[", dimnames(jpos3[[2]])[[2]], fixed=TRUE)],  jpos3[[2]][,grep("log.lambda[", dimnames(jpos3[[2]])[[2]], fixed=TRUE)] )
+#log.lambda.novax<- rbind( jpos3[[1]][,grep("log.lambda.novax[", dimnames(jpos3[[2]])[[2]], fixed=TRUE)],  jpos3[[2]][,grep("log.lambda.novax[", dimnames(jpos3[[2]])[[2]], fixed=TRUE)] )
+log.rr<- log.lambda - log.lambda.novax
+log.rr.quant<-apply(log.rr,1, quantile, probs=c(0.025,0.5,0.975))
+log.rr.quant<-cbind.data.frame(d1[,c('st','agegrp','cmlevel','pcvgrp','epiyr')], t(log.rr.quant))
+log.rr.quant<-log.rr.quant[log.rr.quant$epiyr>=2007,]
+plot(log.rr.quant$epiyr, log.rr.quant[,'50%'])
+#Color palette
+library(RColorBrewer)
+# Classic palette BuPu, with 4 colors
+# I can add more tones to this palette :
+
+log.rr.quant[log.rr.quant$epiyr==2014 &log.rr.quant$`2.5%`>0,] #which have significant increases?
+log.rr.quant[log.rr.quant$epiyr==2014 &log.rr.quant$`97.5%`<0,] #which have significant increases?
+log.rr.quant[log.rr.quant$epiyr==2014 &log.rr.quant$st=='19A',]
+
+plot(log.rr.quant[log.rr.quant$pcvgrp==3,'epiyr'], log.rr.quant[log.rr.quant$pcvgrp==3,'50%'])
+tiff(file="C:\\Users\\DMW63\\Desktop\\My documents h\\SSI\\polished\\long-term dynamics\\Comorbid v1\\Model Comparisons\\V13\\rr st risk group 2014 ab.tif", width=8, height=4,units="in", res=150)
+log.rr.2014<-log.rr.quant[log.rr.quant$epiyr==2014 ,]
+par(mfrow=c(1,2))
+symbol.select=c(21,22,23,24,25)
+col.select=c('white','blue')
+for(i in 1:2){
+  plotme<-log.rr.2014[log.rr.2014$pcvgrp==i,]
+  plotme$cmlevel<-as.numeric(plotme$cmlevel)
+  set.seed(123)
+  coul = brewer.pal(9, "Set1") 
+  coul = colorRampPalette(coul)(length(unique(plotme$st)))
+  coul<-sample(coul) #randomly sort
+  plotme$colfill<-"NA"
+  plotme$coloutline<-'NA'
+  plotme$st.index<-as.numeric(as.factor(plotme$st))
+  for(j in 1:max(plotme$st.index)){plotme$colfill[plotme$st.index==j]<-coul[j];plotme$coloutline[plotme$st.index==j]<-coul[j]}
+  plotme$colfill[plotme$cmlevel==0]<-"white"
+  plotme$st.age.index<-as.numeric(as.factor(plotme$st)) + as.numeric(plotme$agegrp)/10-1/10 +5/10*plotme$cmlevel
+  plot(plotme$st.age.index,plotme$`50%` ,xlab='', ylab='', col='white', bty='l', xaxt='n', ylim=c(-7,5))
+  segments(x0=plotme$st.age.index, y0=plotme$`2.5%`,y1=plotme$`97.5%`  , col='gray')
+  points(plotme$st.age.index, plotme$`50%` ,cex=0.75, col=plotme$coloutline,bg=plotme$colfill, pch=symbol.select[as.numeric(plotme$agegrp) ] )
+  text(plotme$st.age.index[plotme$agegrp==5 & plotme$cmlevel==1], plotme$`50%`[plotme$agegrp==5& plotme$cmlevel==1]+1, plotme$st[plotme$agegrp==5& plotme$cmlevel==1] ,col=plotme$colfill[plotme$agegrp==5& plotme$cmlevel==1])
+  abline (h=0, col='gray', lty=2)
+}
+dev.off()
+tiff(file="C:\\Users\\DMW63\\Desktop\\My documents h\\SSI\\polished\\long-term dynamics\\Comorbid v1\\Model Comparisons\\V13\\rr st risk group 2014 c.tif", width=11, height=4,units="in", res=150)
+par(mfrow=c(1,1))
+symbol.select=c(21,22,23,24,25)
+for(i in 3:3){
+  plotme<-log.rr.2014[log.rr.2014$pcvgrp==i,]
+  plotme$cmlevel<-as.numeric(plotme$cmlevel)
+  set.seed(123)
+  coul = brewer.pal(9, "Set1") 
+  coul = colorRampPalette(coul)(length(unique(plotme$st)))
+  coul<-sample(coul) #randomly sort
+  plotme$colfill<-"NA"
+  plotme$coloutline<-'NA'
+  plotme$st.index<-as.numeric(as.factor(plotme$st))
+  for(j in 1:max(plotme$st.index)){plotme$colfill[plotme$st.index==j]<-coul[j];plotme$coloutline[plotme$st.index==j]<-coul[j]}
+  plotme$colfill[plotme$cmlevel==0]<-"white"
+  plotme$st.age.index<-as.numeric(as.factor(plotme$st)) + as.numeric(plotme$agegrp)/10-1/10 +5/10*plotme$cmlevel
+  plot(plotme$st.age.index,plotme$`50%` ,xlab='', ylab='', col='white', bty='l', xaxt='n', ylim=c(-7,5))
+  segments(x0=plotme$st.age.index, y0=plotme$`2.5%`,y1=plotme$`97.5%`  , col='gray')
+  points(plotme$st.age.index, plotme$`50%` ,cex=0.75, col=plotme$coloutline,bg=plotme$colfill, pch=symbol.select[as.numeric(plotme$agegrp) ] )
+  text(plotme$st.age.index[plotme$agegrp==5 & plotme$cmlevel==1], plotme$`50%`[plotme$agegrp==5& plotme$cmlevel==1]+1, plotme$st[plotme$agegrp==5& plotme$cmlevel==1] ,col=plotme$colfill[plotme$agegrp==5& plotme$cmlevel==1])
+  abline (h=0, col='gray', lty=2)
+}
+dev.off()
+###########################################
+###########################################
+############################################
+
+#######IMPACT OF REPLACEMENT BY RISK GROUP
+##############################################################
+################################
+#Cases prevented by strata and time point
+cases.prevented<-exp(log.lambda) - exp(log.lambda.novax)
+cases.novax<- exp(log.lambda.novax)
+cases.withvax<- exp(log.lambda)
+
+#################################################
+#################################################
+#Need to calculate obs RR (fitted/counterfactual); RR if replacement was 0 (ie cases prevented PCV7/total ounterfactual)
+#WITH THESE STATISTICS, CLOSER to 1 indicates less impact on replacement, closer to 0 indicates full effect of replacement; negative sign indicates net increase
+cases.prevented.net<-cbind.data.frame( d1$agegrp,d1$cmlevel,d1$pcvgrp, d1$epiyr,cases.prevented)
+names(cases.prevented.net)[1:4]<-c('agegrp','cmlevel','pcvgrp','epiyr')
+cases.prevented.net<-cases.prevented.net[cases.prevented.net$epiyr>2006,]
+cases.prevented.net.agg<-aggregate( .~  agegrp+cmlevel+ epiyr, FUN=sum,data=cases.prevented.net)
+cases.prevented.pcv7.agg<-aggregate( .~  agegrp+cmlevel+ epiyr, FUN=sum,data=cases.prevented.net[cases.prevented.net$pcvgrp==1,])
+cases.prevented.pcv13.agg<-aggregate( .~  agegrp+cmlevel+ epiyr, FUN=sum,data=cases.prevented.net[cases.prevented.net$pcvgrp==2,])
+
+cases.prevented.pcvs.agg<-cbind.data.frame(cases.prevented.pcv7.agg[,c(1:4)] ,cases.prevented.pcv7.agg[,-c(1:4)]+cases.prevented.pcv13.agg[,-c(1:4)])
+cases.prevented.pcvs.agg.q<-t(apply( cases.prevented.pcvs.agg[,-c(1:4)],1,quantile, probs=c(0.025,0.5,0.975)))
+cases.prevented.pcvs.agg.q<-cbind.data.frame(cases.prevented.pcvs.agg[,c(1:4)],cases.prevented.pcvs.agg.q)
+cases.prevented.pcvs.agg.q<-cases.prevented.pcvs.agg.q[cases.prevented.pcvs.agg.q$epiyr==2014,'50%']
+
+cases.prevented.nvt.agg<-aggregate( .~  agegrp+cmlevel+ epiyr, FUN=sum,data=cases.prevented.net[cases.prevented.net$pcvgrp==3,])
+cases.prevented.nvt.agg.q<-t(apply( cases.prevented.nvt.agg[,-c(1:4)],1,quantile, probs=c(0.025,0.5,0.975)))
+cases.prevented.nvt.agg.q<-cbind.data.frame(cases.prevented.nvt.agg[,c(1:4)],cases.prevented.nvt.agg.q)
+cases.prevented.nvt.agg.q<-cases.prevented.nvt.agg.q[cases.prevented.nvt.agg.q$epiyr==2014,'50%']
+#PCV7 effect only
+pct.max.benefit.achieved.pcv7<- cases.prevented.net.agg[,-c(1:4)]  /cases.prevented.pcv7.agg[,-c(1:4)] 
+pct.max.benefit.achieved.pcv7.q<-cbind.data.frame(cases.prevented.net.agg[,c(1:4)],t(apply( pct.max.benefit.achieved.pcv7,1,quantile, probs=c(0.025,0.5,0.975))))
+pct.max.benefit.achieved.pcv7.q<-pct.max.benefit.achieved.pcv7.q[pct.max.benefit.achieved.pcv7.q$epiyr<=2009,] #restrict to pre-PCV13 period
+
+#PCV7/13 combined effect
+pct.max.benefit.achieved.pcv7.13<- cases.prevented.net.agg[,-c(1:4)]  /(cases.prevented.pcv7.agg[,-c(1:4)] + cases.prevented.pcv13.agg[,-c(1:4)] )
+pct.max.benefit.achieved.pcv7.13.q<-cbind.data.frame(cases.prevented.net.agg[,c(1:4)],t(apply( pct.max.benefit.achieved.pcv7.13,1,quantile, probs=c(0.025,0.5,0.975))))
+pct.max.benefit.achieved.pcv7.13.q<-pct.max.benefit.achieved.pcv7.13.q[pct.max.benefit.achieved.pcv7.13.q$epiyr>=2014,] #restrict to post-PCV13 period
+pct.max.benefit.achieved.2014<-pct.max.benefit.achieved.pcv7.13.q[pct.max.benefit.achieved.pcv7.13.q$epiyr==2014,c('agegrp','cmlevel','50%')]
+
+#Relate these ST replacement impact with pct expected if no vaccine present
+#Pcv7?13 types counterfactual
+cases.novax.net<-cbind.data.frame( d1$agegrp,d1$cmlevel,d1$pcvgrp, d1$epiyr,cases.novax)
+names(cases.novax.net)[1:4]<-c('agegrp','cmlevel','pcvgrp','epiyr')
+cases.novax.pcvgrp.riskgrp<-aggregate( .~  agegrp+cmlevel+ epiyr, FUN=sum,data=cases.novax.net)
+cases.novax.pcvgrp.riskgrp.q<-cbind.data.frame(cases.novax.pcvgrp.riskgrp[,c(1:4)],t(apply( cases.novax.pcvgrp.riskgrp[,-c(1:4)],1,quantile, probs=c(0.025,0.5,0.975))))
+total.expected.cases.2014<-round(cases.novax.pcvgrp.riskgrp.q[cases.novax.pcvgrp.riskgrp.q$epiyr==2014,'50%'])
+
+cases.novax.pcv.type<-aggregate( .~  agegrp+cmlevel+ epiyr, FUN=sum,data=cases.novax.net[cases.novax.net$pcvgrp %in% c(1,2),])
+cases.novax.pcv.type.q<-cbind.data.frame(cases.novax.pcv.type[,c(1:4)],t(apply( cases.novax.pcv.type[,-c(1:4)],1,quantile, probs=c(0.025,0.5,0.975))))
+vaxtype.expected.cases.2014<-round(cases.novax.pcv.type.q[cases.novax.pcv.type.q$epiyr==2014,'50%'])
+
+#Pcv7?13 types fitted
+cases.withvax.net<-cbind.data.frame( d1$agegrp,d1$cmlevel,d1$pcvgrp, d1$epiyr,cases.withvax)
+names(cases.withvax.net)[1:4]<-c('agegrp','cmlevel','pcvgrp','epiyr')
+cases.withvax.pcv.type<-aggregate( .~  agegrp+cmlevel+ epiyr, FUN=sum,data=cases.withvax.net[cases.withvax.net$pcvgrp %in% c(1,2),])
+cases.withvax.pcv.type.q<-cbind.data.frame(cases.withvax.pcv.type[,c(1:4)],t(apply( cases.withvax.pcv.type[,-c(1:4)],1,quantile, probs=c(0.025,0.5,0.975))))
+vaxtype.fitted.cases.2014<-round(cases.withvax.pcv.type.q[cases.withvax.pcv.type.q$epiyr==2014,'50%'])
+
+cases.withvax.net.allst<-aggregate( .~  agegrp+cmlevel+ epiyr, FUN=sum,data=cases.withvax.net[cases.withvax.net$pcvgrp %in% c(1,2,3),])
+cases.withvax.net.allst.q<-cbind.data.frame(cases.withvax.net.allst[,c(1:4)],t(apply( cases.withvax.net.allst[,-c(1:4)],1,quantile, probs=c(0.025,0.5,0.975))))
+all.st.fitted.cases.2014<-round(cases.withvax.net.allst.q[cases.withvax.net.allst.q$epiyr==2014,'50%'])
+
+#NVT types fitted
+cases.withvax.nvt.type<-aggregate( .~  agegrp+cmlevel+ epiyr, FUN=sum,data=cases.withvax.net[cases.withvax.net$pcvgrp %in% c(3),])
+cases.withvax.nvt.type.q<-cbind.data.frame(cases.withvax.nvt.type[,c(1:4)],t(apply( cases.withvax.nvt.type[,-c(1:4)],1,quantile, probs=c(0.025,0.5,0.975))))
+nvt.fitted.cases.2014<-round(cases.withvax.nvt.type.q[cases.withvax.nvt.type.q$epiyr==2014,'50%'])
+
+
+#Want table that has for each of the 10 risk groups for 2014: 
+#total expected cases 2014/15, (counterfactual)
+#Total fitted cases 2014/15
+
+#pcv7 serotypes prevented
+#NVT excess 
+
+#%of max vaccine effect achieved
+prevax.ipdN<-aggregate( .~  agegrp+cmlevel, FUN=sum,data=d1[d1$epiyr %in% c(2004,2005,2006),c('agegrp','cmlevel','ipdN')])
+prevax.ipdN.pcv7.13.type<-aggregate( .~  agegrp+cmlevel, FUN=sum,data=d1[d1$epiyr %in% c(2004,2005,2006) & d1$PCVGRP %in% c(1,2),c('agegrp','cmlevel','ipdN')])
+prop.pcv.pre<-prevax.ipdN.pcv7.13.type[,3]/prevax.ipdN[,3]
+summary.table.cm<-cbind.data.frame( total.expected.cases.2014,all.st.fitted.cases.2014, round(cases.prevented.pcvs.agg.q), round(cases.prevented.nvt.agg.q), pct.max.benefit.achieved.2014,prop.pcv.pre)
+summary.table.cm$Agecat=as.numeric(summary.table.cm$Agecat)
+summary.table.cm<-summary.table.cm[,c('agegrp','cmlevel','prop.pcv.pre','total.expected.cases.2014','all.st.fitted.cases.2014','round(cases.prevented.pcvs.agg.q)', "round(cases.prevented.nvt.agg.q)" , '50%')]
+names(summary.table.cm)<-c('Agecat',"CM",'Proportion PCV13 type pre','N cases expected without vaccine', 'N cases with vaccine' ,'N cases of PCV13 prevented','N cases of NVTs gained' , 'Replacement index')
+#Estimated total RR in the risk group
+summary.table.cm$net.rr<- summary.table.cm$`N cases with vaccine`/summary.table.cm$`N cases expected without vaccine`
+#Estimated RR given estimated decline in VTs and no replacement
+summary.table.cm$max.possible.rr<-(summary.table.cm$`N cases expected without vaccine`- -1*summary.table.cm$`N cases of PCV13 prevented`)/summary.table.cm$`N cases expected without vaccine`
+
+summary.table.cm$prop.not.prevented<- 1- (summary.table.cm$`N cases of PCV13 prevented`*-1)/summary.table.cm$`N cases expected without vaccine`
+plot(summary.table.cm$`Proportion PCV13 type pre`, summary.table.cm$`Replacement index`)
+plot((1-summary.table.cm$net.rr)*100, summary.table.cm$`Replacement index`) #How much does replacement offset benefit vs net RR
+plot(summary.table.cm$`Proportion PCV13 type pre`, summary.table.cm$net.rr)
+
+
+#####################
+#On diagonal, have X=y;
+#xaxis will be proportion NVT pre (1-proportion PCV13type)
+#y-axis will be either net.rr (blue) or rr.pcv7.13 serotypes (max.possible.rr) in red
+par(mfrow=c(1,1))
+plot((1-summary.table.cm$'Proportion PCV13 type pre'), (1-summary.table.cm$net.rr)*100, type='p',col='blue', bty='l', pch=16,
+         xlab="Proportion of IPD caused by NVTs, pre-PCV7/10"
+         ,ylab="Overall % Decline in IPD")
+# points((1-summary.table.cm$'Proportion PCV13 type pre'),summary.table.cm$max.possible.rr, col='red' )
+# points((1-summary.table.cm$'Proportion PCV13 type pre'),(1-summary.table.cm$'Proportion PCV13 type pre'), col='gray' )
+# segments(x0=(1-summary.table.cm$'Proportion PCV13 type pre'), y0=summary.table.cm$net.rr,y1=summary.table.cm$max.possible.rr, col='black')
+# #segments(x0=(1-summary.table.cm$'Proportion PCV13 type pre'), y0=(1-summary.table.cm$'Proportion PCV13 type pre'),y1=summary.table.cm$max.possible.rr, col='gray')
+# abline(a=0, b=1, lty=2, col='gray')
+#####################3
+#Would be more clear to redraw this plot as a grouped bar chart tye plot:
+# x axis has age/cm category, with 3 sub-categories to plot
+#1: Proportion PCV7/13 pre
+#2: Percent reduction in achieved without replacement (reduction in PCV7/13 ST over total expected IPD)
+#3: Total net reduction
+pdf(file="C:\\Users\\DMW63\\Desktop\\My documents h\\SSI\\polished\\long-term dynamics\\Comorbid v1\\Model Comparisons\\V13\\max and net cases prevented.pdf", width=9, height=4.5)
+
+par(mfrow=c(1,2))
+titles<-c("No Comorbidities",'With Comorbidities')
+for(i in 0:1){
+summary.table.cm1<-summary.table.cm[summary.table.cm$CM==i,]
+summary.table.cm1$Agecat<-as.numeric(as.character(summary.table.cm1$Agecat))
+plot(summary.table.cm1$Agecat+0.15, 100*(1-summary.table.cm1$net.rr),
+      pch=15, col='blue', ylim=c(0,100), xlim=c(0.9, 5.4), 
+     ylab="Percent reduction in IPD", 
+     xlab="Age group",xaxt='n',yaxt='n',
+     bty='l')
+axis(1, at=1:5, labels=c('<5y','5-17y','18-39y', '40-64y','65+y'))
+axis(2, at=c(20,40,60,80,100), labels=c('20%','40%','60%', '80%','100%'))
+if(i==1){legend('bottomright',legend=c('Without replacement',
+                                   'With replacement'),border=NULL, col=c('red','blue'),
+                          bty='n',pch=c(16,15), xpd=TRUE,
+                          cex=0.8, box.lty=0)}
+title(titles[i+1])
+points(summary.table.cm1$Agecat+0.0, 100*(1-summary.table.cm1$max.possible.rr),pch=16 ,col='red')
+text(summary.table.cm1$Agecat+0.0, 4+100*(1-summary.table.cm1$max.possible.rr), paste0(round(100*(1-summary.table.cm1$max.possible.rr)),'%'))
+text(summary.table.cm1$Agecat+0.15, -4+100*(1-summary.table.cm1$net.rr), paste0(round(100*(1-summary.table.cm1$net.rr)),'%'))
+segments(x0=summary.table.cm1$Agecat+0.0,y0=100*(1-summary.table.cm1$max.possible.rr),
+        x1=summary.table.cm1$Agecat+0.15,y1=100*(1-summary.table.cm1$net.rr), lty=2, col='gray')
+#points(summary.table.cm1$Agecat+0.3, 100*(1-summary.table.cm1$net.rr),pch=17, col='blue')
+}
+dev.off()
+write.csv(summary.table.cm,"C:\\Users\\DMW63\\Desktop\\My documents h\\SSI\\polished\\long-term dynamics\\Comorbid v1\\Model Comparisons\\V13\\summary.table.csv")
+
+
+
+#################################
+#################################
+###########################################################################
+###########################################################################
+###########################################################################
+
+###############################################################
+#Calculate net benefit by risk group:
+######################
+## overall_cases_prevented by risk group and age group
+rg.agg<-cbind.data.frame( d1$agegrp,d1$cmlevel, d1$epiyr,cases.prevented)
+names(rg.agg)[1:3]<-c('agegrp','cmlevel','epiyr')
+rg.agg<-rg.agg[rg.agg$epiyr>=2006,]
+test3<-aggregate( .~  agegrp+cmlevel+ epiyr, FUN=sum,data=rg.agg)
+cases.prevented.quant.rg<- as.data.frame(t(apply(test3[,-c(1:3)],1, quantile, probs=c(0.025,0.5,0.975))))
+cases.prevented.quant.rg$agegrp<-as.numeric(as.character(test3$agegrp))
+cases.prevented.quant.rg$cmlevel<-as.numeric(as.character(test3$cmlevel))
+cases.prevented.quant.rg$epiyr<-test3$epiyr
+age.label=c('<5y','5-17y','18-39y','40-64y','65+y')
+cm.label<-c('Low Comorbidity', 'Medium/high co-morbidity')
+tiff(file="C:\\Users\\DMW63\\Desktop\\My documents h\\SSI\\polished\\long-term dynamics\\Comorbid v1\\Model Comparisons\\V13\\overall case_prevent_age group risk group.tif", width=8, height=15,units="in", res=150)
+par(mfrow=c(5,2), mar=c(2,3,1,1), oma=c(0,0,1,0))
+for(i in 1:5){
+  for(j in 0:1){
+    plot.data<-cases.prevented.quant.rg[cases.prevented.quant.rg$agegrp==i & cases.prevented.quant.rg$cmlevel==j,]
+    matplot(2006:2014, plot.data[,1:3], type='l', bty='l', ylim=range(plot.data[,1:3]), col='black', ylab='Cases prevented',xlab="Date", lty=c(2,1,2))
+    abline(h=0, col='gray', lty=2)
+    title(paste(age.label[i],cm.label[j+1], sep=" "))
+  }
+}
+dev.off()
+
+
+######################
+
+
+
+
+cases.prevented.quant<- apply(cases.prevented,1, quantile, probs=c(0.025,0.5,0.975))
+cases.prevented.quant<-cbind.data.frame(d1[,c('st','agegrp','cmlevel','pcvgrp','epiyr')], t(cases.prevented.quant))
+combos<-rbind(c(0,1), c(0,3), c(0,4), c(0,5),   c(1,4), c(1,5))  #other strata too sparse
+tiff(file="C:\\Users\\DMW63\\Desktop\\My documents h\\SSI\\polished\\long-term dynamics\\Comorbid v1\\Model Comparisons\\V13\\st case_prevent_risk group.tif", width=7, height=10,units="in", res=150)
+par(mfrow=c(6,3), mar=c(2, 2,1 , 0))
+for(j in 1:nrow(combos)){
+subset<-cases.prevented.quant[cases.prevented.quant$epiyr>=2006 & cases.prevented.quant$cmlevel==combos[j,1]   & cases.prevented.quant$agegrp==combos[j,2]  ,]
+subset<-subset[order(subset$st,subset$epiyr),]
+subset$st<-as.character(subset$st)
+subset.m<-melt(subset,id=c('agegrp','st','epiyr','cmlevel','pcvgrp'))
+for ( i in 1:3){
+    yrange<-range(subset.m$value[subset.m$variable=='50%'])
+  subset.c<-cast(subset.m, epiyr~st  , subset=variable=='50%' & pcvgrp==i)
+  matplot( subset.c$epiyr, subset.c[,-1], type='l', col="black", bty='l', ylim=yrange, xlim=c(2006, 2014.5))
+  text(2014.1,subset.c[nrow(subset.c),-1], names(subset.c)[-1] )
+  abline(v=c(2006,2010), h=0, lty=2, col="red")
+  if(i==1){title(paste0("Age group ",combos[j,2]," Comorbid ", combos[j,1]))}
+}
+}
+dev.off()
+
+##RR by ST and strata
+rr<-log(exp(log.lambda) / exp(log.lambda.novax))
+rr.quant<- apply(rr,1, quantile, probs=c(0.025,0.5,0.975))
+rr.quant<-cbind.data.frame(d1[,c('st','agegrp','cmlevel','pcvgrp','epiyr')], t(rr.quant))
+rr.pcv7.2014<-rr.quant[rr.quant$epiyr==2014 & rr.quant$pcvgrp %in% c(2), ]
+rr.pcv7.2014[,6:8]<-exp(rr.pcv7.2014[,6:8])
+
+rr.pcv13.2009<-rr.quant[rr.quant$epiyr==2009 & rr.quant$pcvgrp %in% c(2,3) ,]
+rr.pcv13.2009[,6:8]<-exp(rr.pcv13.2009[,6:8])
+View(rr.pcv13.2009)
+
+combos<-rbind(c(0,1), c(0,3), c(0,4), c(0,5),   c(1,4), c(1,5))  #other strata too sparse
+tiff(file="C:\\Users\\DMW63\\Desktop\\My documents h\\SSI\\polished\\long-term dynamics\\Comorbid v1\\Model Comparisons\\V13\\st rr_risk group.tif", width=7, height=10,units="in", res=150)
+par(mfrow=c(6,3), mar=c(2, 2,1 , 0))
+for(j in 1:nrow(combos)){
+  subset<-rr.quant[rr.quant$epiyr>=2006 & rr.quant$cmlevel==combos[j,1]   & rr.quant$agegrp==combos[j,2]  ,]
+  subset<-subset[order(subset$st,subset$epiyr),]
+  subset$st<-as.character(subset$st)
+  subset.m<-melt(subset,id=c('agegrp','st','epiyr','cmlevel','pcvgrp'))
+  for ( i in 1:3){
+    yrange<-range(subset.m$value[subset.m$variable=='50%' &  subset.m$pcvgrp==i])
+    subset.c<-cast(subset.m, epiyr~st  , subset=variable=='50%' & pcvgrp==i)
+    matplot( subset.c$epiyr, subset.c[,-1], type='l', col="black", bty='l', ylim=yrange, xlim=c(2006, 2014.5))
+    text(2014.1,subset.c[nrow(subset.c),-1], names(subset.c)[-1] )
+    abline(v=c(2006,2010), h=0, lty=2, col="red")
+    if(i==1){title(paste0("Age group ",combos[j,2]," Comorbid ", combos[j,1]))}
+  }
+}
+dev.off()
+#####################################
+#Aggregate across all risk groups by ST
+st.agg<-cbind.data.frame(d1$st, d1$epiyr,cases.prevented)
+names(st.agg)[1:2]<-c('st','epiyr')
+st.agg<-st.agg[st.agg$epiyr>=2006,]
+test1<-aggregate( .~  st+ epiyr, FUN=sum,data=st.agg)
+cases.prevented.quant.st<- as.data.frame(t(apply(test1[,-c(1:2)],1, quantile, probs=c(0.025,0.5,0.975))))
+cases.prevented.quant.st$st<-test1$st
+cases.prevented.quant.st$epiyr<-test1$epiyr
+cases.prevented.quant.st$pcv7st<-0
+cases.prevented.quant.st$pcv13st<-0
+cases.prevented.quant.st$pcv7st[cases.prevented.quant.st$st %in% c('4','6B','9V','14','18C','19F','23F')]<-1
+cases.prevented.quant.st$pcv13st[cases.prevented.quant.st$st %in% c('1','3','5','6A', '7F','19A')]<-1
+cases.prevented.quant.st$pcvgrp<-3
+cases.prevented.quant.st$pcvgrp[cases.prevented.quant.st$pcv7st==1]<-1
+cases.prevented.quant.st$pcvgrp[cases.prevented.quant.st$pcv13st==1]<-2
+yaxislims<-range(cases.prevented.quant.st$`50%`)
+tiff(file="C:\\Users\\DMW63\\Desktop\\My documents h\\SSI\\polished\\long-term dynamics\\Comorbid v1\\Model Comparisons\\V13\\st case_prevent_overall.tif", width=1021, height=458,units="px", res=150)
+par(mfrow=c(1,3), mar=c(3,3,0,0))
+for(i in 1:3){
+plot.data<-cases.prevented.quant.st[cases.prevented.quant.st$pcvgrp==i,]
+plot.datam<-melt(plot.data, id=c("epiyr","st"))
+plot.datac<-as.data.frame(cast(plot.datam, epiyr~st, subset=variable=='50%'))
+matplot(plot.datac$epiyr,plot.datac[,-1], ylim=yaxislims, type='l',xaxt='n',xlab="Year", col='black',bty='l', ylab=c(""),xlim=c(2006.0,2014.5))
+axis(side=1, at=c(2007,2010,2012,2014), labels=c("2007/08","2010/11",'2012/13', '2014/15'), cex.axis=0.8)
+axis(side=1, at=c(2006,2007,2008,2009,2010,2011,2012,2013, 2014), labels=FALSE)
+text(2014.5, plot.datac[nrow(plot.datac),-1], names(plot.datac )[-1])
+abline(h=0,v=c(2006,2010), lty=2, col="gray")
+}
+dev.off()
+cases.prevented.quant.st[cases.prevented.quant.st$st=='12F',]
+#RR
+
+
+##################################################################################
+##PCV GROUPS
+rg.agg<-cbind.data.frame(d1$pcvgrp, d1$epiyr,cases.prevented)
+names(rg.agg)[1:2]<-c('pcvgrp','epiyr')
+rg.agg<-rg.agg[rg.agg$epiyr>=2006,]
+test2<-aggregate( .~  pcvgrp+ epiyr, FUN=sum,data=rg.agg)
+cases.prevented.quant.rg<- as.data.frame(t(apply(test2[,-c(1:2)],1, quantile, probs=c(0.025,0.5,0.975))))
+cases.prevented.quant.rg$pcvgrp<-test2$pcvgrp
+cases.prevented.quant.rg$epiyr<-test2$epiyr
+tiff(file="C:\\Users\\DMW63\\Desktop\\My documents h\\SSI\\polished\\long-term dynamics\\Comorbid v1\\Model Comparisons\\V13\\pcvgrp case_prevent_overall.tif", width=3, height=3,units="in", res=150)
+par(mfrow=c(1,1), mar=c(2,3,0,1), oma=c(0,0,0,0))
+  matplot(2006:2014, cases.prevented.quant.rg[cases.prevented.quant.rg$pcvgrp==1,1:3], type='l', bty='l', ylim=range(cases.prevented.quant.rg[,1:3]), col='#e41a1c', ylab='Cases prevented',xlab="Date", lty=c(2,1,2))
+  matplot(2006:2014, cases.prevented.quant.rg[cases.prevented.quant.rg$pcvgrp==2,1:3], type='l', bty='l', ylim=range(cases.prevented.quant.rg[,1:3]), col='#377eb8', add=TRUE, lty=c(2,1,2))
+  matplot(2006:2014, cases.prevented.quant.rg[cases.prevented.quant.rg$pcvgrp==3,1:3], type='l', bty='l', ylim=range(cases.prevented.quant.rg[,1:3]), col='#4daf4a', add=TRUE, lty=c(2,1,2))
+  abline(h=0, col='gray', lty=2)
+  dev.off()
+######################
+#####################
+  
+  ##PCV GROUPS
+  rg.agg<-cbind.data.frame(d1$pcvgrp, d1$agegrp, d1$epiyr,cases.prevented)
+  names(rg.agg)[1:3]<-c('pcvgrp','agegrp','epiyr')
+  rg.agg<-rg.agg[rg.agg$epiyr>=2006,]
+  test2<-aggregate( .~  pcvgrp+agegrp+ epiyr, FUN=sum,data=rg.agg)
+  cases.prevented.quant.rg<- as.data.frame(t(apply(test2[,-c(1:3)],1, quantile, probs=c(0.025,0.5,0.975))))
+  cases.prevented.quant.rg$pcvgrp<-test2$pcvgrp
+  cases.prevented.quant.rg$agegrp<-test2$agegrp
+    cases.prevented.quant.rg$epiyr<-test2$epiyr
+  tiff(file="C:\\Users\\DMW63\\Desktop\\My documents h\\SSI\\polished\\long-term dynamics\\Comorbid v1\\Model Comparisons\\V13\\pcvgrp case_prevent_age group.tif", width=4, height=15,units="in", res=150)
+  par(mfrow=c(5,1), mar=c(2,3,0,1), oma=c(0,0,0,0))
+  for(i in 1:5){
+    plot.data<-cases.prevented.quant.rg[cases.prevented.quant.rg$agegrp==i,]
+  matplot(2006:2014, plot.data[plot.data$pcvgrp==1,1:3], type='l', bty='l', ylim=range(plot.data[,1:3]), col='#e41a1c', ylab='Cases prevented',xlab="Date", lty=c(2,1,2))
+  matplot(2006:2014, plot.data[plot.data$pcvgrp==2,1:3], type='l', bty='l', ylim=range(plot.data[,1:3]), col='#377eb8', add=TRUE, lty=c(2,1,2))
+  matplot(2006:2014, plot.data[plot.data$pcvgrp==3,1:3], type='l', bty='l', ylim=range(plot.data[,1:3]), col='#4daf4a', add=TRUE, lty=c(2,1,2))
+  abline(h=0, col='gray', lty=2)
+  }
+  dev.off()
+  ######################
+  ##PCV GROUPS and comorbid groups
+  rg.agg<-cbind.data.frame(d1$pcvgrp, d1$agegrp, d1$cmlevel, d1$epiyr,cases.prevented)
+  names(rg.agg)[1:4]<-c('pcvgrp','agegrp','cmlevel','epiyr')
+  rg.agg<-rg.agg[rg.agg$epiyr>=2006,]
+  test2<-aggregate( .~  pcvgrp+agegrp+ cmlevel+epiyr, FUN=sum,data=rg.agg)
+  cases.prevented.quant.rg<- as.data.frame(t(apply(test2[,-c(1:4)],1, quantile, probs=c(0.025,0.5,0.975))))
+  cases.prevented.quant.rg$pcvgrp<-test2$pcvgrp
+  cases.prevented.quant.rg$agegrp<-test2$agegrp
+  cases.prevented.quant.rg$cmlevel<-test2$cmlevel
+  cases.prevented.quant.rg$epiyr<-test2$epiyr
+  age.label=c('<5y','5-17y','18-39y','40-64y','65+y')
+  cm.label<-c('Low Comorbidity', 'Medium/high co-morbidity')
+  tiff(file="C:\\Users\\DMW63\\Desktop\\My documents h\\SSI\\polished\\long-term dynamics\\Comorbid v1\\Model Comparisons\\V13\\pcvgrp case_prevent_age group and cmlevel.tif", width=8, height=15,units="in", res=150)
+  par(mfrow=c(5,2), mar=c(2,3,1,1), oma=c(0,0,1,0))
+  for(i in 1:5){
+    for(j in 0:1){
+    plot.data<-cases.prevented.quant.rg[cases.prevented.quant.rg$agegrp==i & cases.prevented.quant.rg$cmlevel==j,]
+    matplot(2006:2014, plot.data[plot.data$pcvgrp==1,1:3], type='l', bty='l', ylim=range(plot.data[,1:3]), col='#e41a1c', ylab='Cases prevented',xlab="Date", lty=c(2,1,2))
+    matplot(2006:2014, plot.data[plot.data$pcvgrp==2,1:3], type='l', bty='l', ylim=range(plot.data[,1:3]), col='#377eb8', add=TRUE, lty=c(2,1,2))
+    matplot(2006:2014, plot.data[plot.data$pcvgrp==3,1:3], type='l', bty='l', ylim=range(plot.data[,1:3]), col='#4daf4a', add=TRUE, lty=c(2,1,2))
+    abline(h=0, col='gray', lty=2)
+    title(paste(age.label[i],cm.label[j+1], sep=" "))
+  }
+  }
+  dev.off()
+  
+  #####################  
+  ##RR of VT/NVT by RISK GROUP
+  rg.agg.pred<-cbind.data.frame(d1$pcvgrp, d1$cmlevel,d1$agegrp, d1$epiyr,exp(log.lambda))
+  names(rg.agg.pred)[1:4]<-c('pcvgrp','cmlevel','agegrp','epiyr')
+  rg.agg.pred<-rg.agg.pred[rg.agg.pred$epiyr>=2006,]
+  rg.agg.pred$pcvgrp[rg.agg.pred$pcvgrp %in% c(1,2)]<-1
+  rg.agg.pred.novax<-cbind.data.frame(d1$pcvgrp,d1$cmlevel, d1$agegrp, d1$epiyr,exp(log.lambda.novax))
+  names(rg.agg.pred.novax)[1:4]<-c('pcvgrp','cmlevel','agegrp','epiyr')
+  rg.agg.pred.novax<-rg.agg.pred.novax[rg.agg.pred.novax$epiyr>=2006,]
+  rg.agg.pred.novax$pcvgrp[rg.agg.pred.novax$pcvgrp %in% c(1,2)]<-1
+     rg.agg.pred.novax2<-aggregate( .~  pcvgrp+agegrp+ cmlevel+epiyr, FUN=sum,data=rg.agg.pred.novax)
+  rg.agg.pred.vax2<-aggregate( .~  pcvgrp+agegrp+ cmlevel+epiyr, FUN=sum,data=rg.agg.pred)
+  rg.rr<- rg.agg.pred.vax2[,-c(1:4)]/rg.agg.pred.novax2[,-c(1:4)]
+  rg.rr.q<-t(apply(rg.rr,1,quantile,probs=c(0.025,0.5,0.975)))
+  rg.rr.q<-cbind.data.frame(rg.agg.pred.vax2[,c(1:4)],-1*round((1-rg.rr.q)*100))
+  rg.rr.q<-rg.rr.q[order(rg.rr.q$pcvgrp, rg.rr.q$agegrp, rg.rr.q$cmlevel),]
+  #summary.table.cm<-summary.table.cm[order(summary.table.cm$Agecat, summary.table.cm$CM),]
+  rg.rr.q$format.pct<-paste0(rg.rr.q$`50%`,'% ','(' ,rg.rr.q$`2.5%`,'%, ',rg.rr.q$`97.5%`,'%)'  )
+  rg.rr.q[rg.rr.q$epiyr==2014,]
+  #Net change in IPD
+  rg.agg.pred.novax2.net<-aggregate( .~  agegrp+ cmlevel+epiyr, FUN=sum,data=rg.agg.pred.novax)
+  rg.agg.pred.vax2.net<-aggregate( .~  agegrp+ cmlevel+epiyr, FUN=sum,data=rg.agg.pred)
+  rg.rr.net<- rg.agg.pred.vax2.net[,-c(1:4)]/rg.agg.pred.novax2.net[,-c(1:4)]
+  rg.rr.net.q<-t(apply(rg.rr.net,1,quantile,probs=c(0.025,0.5,0.975)))
+  rg.rr.net.q<-cbind.data.frame(rg.agg.pred.vax2.net[,c(1:4)],-1*round((1-rg.rr.net.q)*100))
+  rg.rr.net.q<-rg.rr.net.q[order(rg.rr.net.q$pcvgrp, rg.rr.net.q$agegrp, rg.rr.net.q$cmlevel),]
+  rg.rr.net.q$format.pct<-paste0(rg.rr.net.q$`50%`,'% ','(' ,rg.rr.net.q$`2.5%`,'%, ',rg.rr.net.q$`97.5%`,'%)'  )
+  rg.rr.net.q<-rg.rr.net.q[order(rg.rr.net.q$agegrp,rg.rr.net.q$cmlevel),]
+  rg.rr.net.q<-rg.rr.net.q[rg.rr.net.q$epiyr==2014,]
+  #% of counterfactual that is PCV7/13 types
+  rg.agg.pred.novax2.net.VT<-aggregate( .~  agegrp+ cmlevel+epiyr, FUN=sum,data=rg.agg.pred.novax[rg.agg.pred.novax$pcvgrp %in% c(1,2) & rg.agg.pred.novax$epiyr==2014,])
+  rg.agg.pred.novax2.net.all<-aggregate( .~  agegrp+ cmlevel+epiyr, FUN=sum,data=rg.agg.pred.novax[ rg.agg.pred.novax$epiyr==2014,])
+  pct.vt<-rg.agg.pred.novax2.net.VT[-c(1:4)]/rg.agg.pred.novax2.net.all[-c(1:4)]
+  pct.vt.counter<-paste0(round(100*apply(pct.vt,1,median)),'%')
+  table.fmt<-merge(rg.rr.q[rg.rr.q$pcvgrp==1,c('agegrp','cmlevel','epiyr','format.pct')],rg.rr.q[rg.rr.q$pcvgrp==3,c('agegrp','cmlevel','epiyr','format.pct')], by=c('agegrp','cmlevel','epiyr'))
+  table.fmt<-cbind.data.frame(table.fmt[table.fmt$epiyr==2014,],rg.rr.net.q$format.pct, pct.vt.counter) #merge in net change
+  names(table.fmt)<-c('Age group', 'Comorbid','Epiyr','% Change PCV13 serotypes','% Change non-vaccine serotypes', "Net % Change","% of IPD preventable by PCV7/13")
+  table.fmt
+  table.fmt<-table.fmt[,c('Age group', 'Comorbid',"% of IPD preventable by PCV7/13",'% Change PCV13 serotypes','% Change non-vaccine serotypes', "Net % Change")]
+  write.csv(table.fmt,"C:\\Users\\DMW63\\Desktop\\My documents h\\SSI\\polished\\long-term dynamics\\Comorbid v1\\Model Comparisons\\V13\\pct_change_vt_grp.csv")
+  plot(rg.rr.q)
+  
+  
+  ## overall_cases_prevented by age group
+  rg.agg<-cbind.data.frame( d1$agegrp, d1$epiyr,cases.prevented)
+  names(rg.agg)[1:2]<-c('agegrp','epiyr')
+  rg.agg<-rg.agg[rg.agg$epiyr>=2006,]
+  test3<-aggregate( .~  agegrp+ epiyr, FUN=sum,data=rg.agg)
+  cases.prevented.quant.rg<- as.data.frame(t(apply(test3[,-c(1:2)],1, quantile, probs=c(0.025,0.5,0.975))))
+  cases.prevented.quant.rg$agegrp<-test3$agegrp
+  cases.prevented.quant.rg$epiyr<-test3$epiyr
+  tiff(file="C:\\Users\\DMW63\\Desktop\\My documents h\\SSI\\polished\\long-term dynamics\\Comorbid v1\\Model Comparisons\\V13\\overall case_prevent_age group.tif", width=4, height=15,units="in", res=150)
+  par(mfrow=c(5,1), mar=c(2,3,0,1), oma=c(0,0,0,0))
+  for(i in 1:5){
+    plot.data<-cases.prevented.quant.rg[cases.prevented.quant.rg$agegrp==i,]
+    matplot(2006:2014, plot.data[,1:3], type='l', bty='l', ylim=range(plot.data[,1:3]), col='black', ylab='Cases prevented',xlab="Date", lty=c(2,1,2))
+    abline(h=0, col='gray', lty=2)
+  }
+  dev.off()
+  ######################
+  ## overall_cases_prevented by risk group and age group
+  rg.agg<-cbind.data.frame( d1$agegrp,d1$cmlevel, d1$epiyr,cases.prevented, cases.withvax, cases.novax)
+  names(rg.agg)[1:3]<-c('agegrp','cmlevel','epiyr')
+  rg.agg<-rg.agg[rg.agg$epiyr>=2006,]
+  test3<-aggregate( .~  agegrp+cmlevel+ epiyr, FUN=sum,data=rg.agg)
+  cases.prevented.quant.rg<- as.data.frame(t(apply(test3[,-c(1:3)],1, quantile, probs=c(0.025,0.5,0.975))))
+  cases.prevented.quant.rg$agegrp<-as.numeric(as.character(test3$agegrp))
+  cases.prevented.quant.rg$cmlevel<-as.numeric(as.character(test3$cmlevel))
+  cases.prevented.quant.rg$epiyr<-test3$epiyr
+  age.label=c('<5y','5-17y','18-39y','40-64y','65+y')
+  cm.label<-c('Low Comorbidity', 'Medium/high co-morbidity')
+  tiff(file="C:\\Users\\DMW63\\Desktop\\My documents h\\SSI\\polished\\long-term dynamics\\Comorbid v1\\Model Comparisons\\V13\\overall case_prevent_age group risk group.tif", width=8, height=15,units="in", res=150)
+  par(mfrow=c(5,2), mar=c(2,3,1,1), oma=c(0,0,1,0))
+  for(i in 1:5){
+    for(j in 0:1){
+    plot.data<-cases.prevented.quant.rg[cases.prevented.quant.rg$agegrp==i & cases.prevented.quant.rg$cmlevel==j,]
+    matplot(2006:2014, plot.data[,1:3], type='l', bty='l', ylim=range(plot.data[,1:3]), col='black', ylab='Cases prevented',xlab="Date", lty=c(2,1,2))
+    abline(h=0, col='gray', lty=2)
+    title(paste(age.label[i],cm.label[j+1], sep=" "))
+    }
+  }
+  dev.off()
+  ######################
+  
+  ## overall_cases_prevented by cmlevel , age
+  rg.agg<-cbind.data.frame( d1$agegrp,d1$cmlevel, d1$epiyr,cases.prevented)
+  names(rg.agg)[1:3]<-c('agegrp','cmlevel','epiyr')
+  rg.agg<-rg.agg[rg.agg$epiyr>=2006,]
+  test3<-aggregate( .~  agegrp+cmlevel+ epiyr, FUN=sum,data=rg.agg)
+  cases.prevented.quant.rg<- as.data.frame(t(apply(test3[,-c(1:3)],1, quantile, probs=c(0.025,0.5,0.975))))
+  cases.prevented.quant.rg$agegrp<-as.numeric(as.character(test3$agegrp))
+  cases.prevented.quant.rg$cmlevel<-as.numeric(as.character(test3$cmlevel))
+  cases.prevented.quant.rg$epiyr<-test3$epiyr
+  age.label=c('<5y','5-17y','18-39y','40-64y','65+y')
+  cm.label<-c('Non-comorbid','Comorbid')
+  tiff(file="C:\\Users\\DMW63\\Desktop\\My documents h\\SSI\\polished\\long-term dynamics\\Comorbid v1\\Model Comparisons\\V13\\overall cmlevel_prevent_age group .tif", width=4, height=15,units="in", res=150)
+  par(mfrow=c(5,1), mar=c(2,3,1,1), oma=c(0,0,1,0))
+  for(i in 1:5){
+    for(j in 1:1){
+      plot.data<-cases.prevented.quant.rg[cases.prevented.quant.rg$agegrp==i & cases.prevented.quant.rg$cmlevel==j,]
+      matplot(2006:2014, plot.data[,1:3], type='l', bty='l', ylim=range(plot.data[,1:3]), col='black', ylab='Cases prevented',xlab="Date", lty=c(2,1,2))
+      abline(h=0, col='gray', lty=2)
+      title(paste(age.label[i],cm.label[j+1], sep=" "))
+    }
+  }
+  dev.off()
+  ######################
+  #####################  
+  #Overall cmlevels prevented
+  rg.agg<-cbind.data.frame( d1$agegrp,d1$cmlevel, d1$epiyr,d1$ipdN, cases.prevented)
+  names(rg.agg)[1:4]<-c('agegrp','cmlevel','epiyr', 'ipdN')
+  rg.agg<-rg.agg[rg.agg$epiyr>=2001,]
+  test3<-aggregate( .~  cmlevel+ epiyr, FUN=sum,data=rg.agg)
+  cases.prevented.quant.rg<- as.data.frame(t(apply(test3[,-c(1:4)],1, quantile, probs=c(0.025,0.5,0.975))))
+  cases.prevented.quant.rg$cmlevel<-as.numeric(as.character(test3$cmlevel))
+  cases.prevented.quant.rg$epiyr<-test3$epiyr
+  cases.prevented.quant.rg$ipdN<-test3$ipdN
+  plot(cases.prevented.quant.rg$epiyr, cases.prevented.quant.rg$`50%`)
+  
+  sum(d1$ipdN)
+  sum(d1$ipdN[d1$epiyr %in% c(2001,2002,2003,2004,2005,2006)])/6 #average number of cases per year inpre-period
+  sum(d1$ipdN[d1$epiyr %in% c(2012,2013,2014)])/3 #average number of cases per year inpre-period
+
+  sum(d1$ipdN[d1$epiyr %in% c(2001,2002,2003,2004,2005,2006) & d1$cmlevel==1])/6 #average number of cases per year inpre-period
+  sum(d1$ipdN[d1$epiyr %in% c(2012,2013,2014) & d1$cmlevel==1])/3 #average number of cases per year inpre-period
+  
+    
+  sum(d1$ipdN[d1$epiyr==2014])
+  
+  
+  ###Predicted and counterfactuals quantile, probs=c(0.025,0.5,0.975))
+ pred.2007<-quantile(colSums(exp(log.lambda[d1$epiyr==2014 &d1$cmlevel==1, ]) ), probs=c(0.025,0.5,0.975))
+ pred.2007.novax<-quantile(colSums(exp(log.lambda.novax[d1$epiyr==2014 &d1$cmlevel==1, ]) ), probs=c(0.025,0.5,0.975))
+
+ pred.2007<-quantile(colSums(exp(log.lambda[d1$epiyr==2014 , ]) ), probs=c(0.025,0.5,0.975))
+ pred.2007.novax<-quantile(colSums(exp(log.lambda.novax[d1$epiyr==2014 , ]) ), probs=c(0.025,0.5,0.975))
+ 
+  
+
+#Look at beta4 and bet5 relative to other NVTs
+b4_v.quantiles<- pred.ipd.quantiles[grep("beta4_v[", row.names(pred.ipd.quantiles), fixed=TRUE),c('2.5%','50%','97.5%')]
+b5_v.quantiles<- pred.ipd.quantiles[grep("beta5_v[", row.names(pred.ipd.quantiles), fixed=TRUE),c('2.5%','50%','97.5%')]#Note--can't interpret b5 without b4
+post.change_v_quantiles<-b4_v.quantiles$`50%`*8 + b5_v.quantiles$`50%`*5   #change at last time point
+
+alpha_s_g.quantiles<- cbind.data.frame(unique.st.cm.age.indx.SORTED,pred.ipd.quantiles[grep("alpha_s_g[", row.names(pred.ipd.quantiles),fixed=TRUE),c('2.5%','50%','97.5%')])
+alpha_s_g.quantiles<-alpha_s_g.quantiles[order(alpha_s_g.quantiles$'d1$st'),]
+alpha_s.quantiles<- cbind.data.frame(unique.st.indx,pred.ipd.quantiles[grep("alpha_s[", row.names(pred.ipd.quantiles),fixed=TRUE),c('2.5%','50%','97.5%')])
+
+b4_s.quantiles<- cbind.data.frame(unique.st.indx,pred.ipd.quantiles[grep("beta4_s[", row.names(pred.ipd.quantiles),fixed=TRUE),c('2.5%','50%','97.5%')])
+b5_s.quantiles<- cbind.data.frame(unique.st.indx,pred.ipd.quantiles[grep("beta5_s[", row.names(pred.ipd.quantiles), fixed=TRUE),c('2.5%','50%','97.5%')])
+#b4_g_v.quantiles<- cbind.data.frame(unique.st.indx,pred.ipd.quantiles[grep("beta4_g_v", row.names(pred.ipd.quantiles)),c('2.5%','50%','97.5%')])
+b5_s.quantiles<- cbind.data.frame(unique.st.indx,pred.ipd.quantiles[grep("beta5_s", row.names(pred.ipd.quantiles)),c('2.5%','50%','97.5%')])
+b4_v_s_g.quantiles<- cbind.data.frame(unique.st.cm.age.indx.SORTED,pred.ipd.quantiles[grep("beta4_v_s_g[", row.names(pred.ipd.quantiles), fixed=TRUE),c('2.5%','50%','97.5%')])
+b4_v_s_g.quantiles<-b4_v_s_g.quantiles[order(b4_v_s_g.quantiles$'d1$st'),]
+b5_v_s_g.quantiles<- cbind.data.frame(unique.st.cm.age.indx.SORTED,pred.ipd.quantiles[grep("beta5_v_s_g[", row.names(pred.ipd.quantiles), fixed=TRUE),c('2.5%','50%','97.5%')])
+b5_v_s_g.quantiles<-b5_v_s_g.quantiles[order(b5_v_s_g.quantiles$'d1$st'),]
+
+post.change<-b4_v_s_g.quantiles$`50%`*8 + b5_v_s_g.quantiles$`50%`*5   #change at last time point
+post.change.pcv7<-b4_v_s_g.quantiles$`50%`*3   #change at last time point post-PCV7
+
+
+#Plot intercept vs post-vax change
+nvt.select<-which(b4_v_s_g.quantiles$`d1$obs.pcvgrp.indx`==3)
+pcv7.select<-which(b4_v_s_g.quantiles$`d1$obs.pcvgrp.indx`==1)
+plot(alpha_s_g.quantiles$`50%`[nvt.select],post.change[nvt.select], col='white')
+text(alpha_s_g.quantiles$`50%`[nvt.select],post.change[nvt.select],alpha_s_g.quantiles$`d1$st`[nvt.select])
+abline(h=0)
+
+#Intercept vs "excess incidence" : exp(intercept)*exp(slope)--effectively RR*intercept
+excess_cases_est<- cbind.data.frame(alpha_s_g.quantiles[nvt.select,], exp(alpha_s_g.quantiles$`50%`[nvt.select]) *exp( post.change[nvt.select]) )
+excess_cases_est10<-excess_cases_est[excess_cases_est$`d1$obs.cm.age.indx`==1,]
+plot(excess_cases_est10$`50%` ,excess_cases_est10[,9],col='white') #associationbetween intercept and post-vaccine 
+text(excess_cases_est10$`50%` ,excess_cases_est10[,9], excess_cases_est10$`d1$st`) #associationbetween intercept and post-vaccine 
+
+
+##############################
+#Which serotypes have significant HARMONICS?
+beta1_samp<- jpos3[[1]][,grep("beta1_s[", colnames(jpos3[[1]]),fixed=TRUE)]
+beta2_samp<- jpos3[[1]][,grep("beta2_s[", colnames(jpos3[[1]]),fixed=TRUE)]
+period_samp<- jpos3[[1]][,grep("period[", colnames(jpos3[[1]]),fixed=TRUE)]
+period.q<-summary(period_samp)[[2]]
+period.q<-cbind.data.frame(period.q,unique.st.indx$`d1$st`)
+amp.samp<-sqrt(beta1_samp^2 + beta2_samp^2)
+amp.quant<-t(apply(amp.samp,2,quantile,probs=c(0.025,0.5,0.975)))
+amp.quant<-cbind.data.frame(unique.st.indx,amp.quant)
+matplot( amp.quant[,c('2.5%','50%','97.5%')])
+amp.quant[amp.quant$`d1$obs.cm.age.indx`==5 & amp.quant$`50%`>0.5, 'd1$st'] 
+
+harmonics.quant<-array(NA, c(20, ncol(beta1_samp),3))
+for(i in 1:20){
+  harmonics<- beta1_samp*sin(2*pi*i/period_samp) +beta2_samp*cos(2*pi*i/period_samp)
+  harmonics.quant[i,,]<-t(apply(harmonics,2,quantile,probs=c(0.025,0.5,0.975)))
+}
+
+pdf(file="C:\\Users\\DMW63\\Desktop\\My documents h\\SSI\\polished\\long-term dynamics\\Comorbid v1\\Model Comparisons\\V13\\plot_harmonics.pdf")
+par(mfrow=c(4,4), mar=c(2, 2,1 , 0) , oma=c(0,0,0,0))
+for(i in 1:dim(harmonics.quant)[2]){
+matplot(harmonics.quant[,i,], type='l', bty='l', lty=c(2,1,1),ylim=c(-1,1) ,col="black")
+title(unique.st.indx$`d1$st`[i])
+abline(h=0, lty=2, col='gray')
+}
+dev.off()
+
+# pdf(file="C:\\Users\\DMW63\\Desktop\\My documents h\\SSI\\polished\\long-term dynamics\\Comorbid v1\\Model Comparisons\\V13\\plot_harmonics.pdf")
+# par(mfrow=c(4,4), mar=c(2, 2,1 , 0) , oma=c(0,0,0,0))
+# for(i in 1:length(plot.harm)){
+#   ymin<-min(plot.harm[[i]][,'50%'],plot.harm[[i]][,'2.5%'],plot.harm[[i]][,'97.5%'])
+#   ymax<-max(plot.harm[[i]][,'50%'],plot.harm[[i]][,'2.5%'],plot.harm[[i]][,'97.5%'])
+#   plot(plot.harm[[i]][,'50%'], type='l', ylim=c(-1,1), col="red") 
+#   points(plot.harm[[i]][,'2.5%'], col='red', type="l", lty=2) 
+#   points(plot.harm[[i]][,'97.5%'],col='red', type="l",lty=2)
+#   abline(h=0, lty=2, col="gray") 
+#   title(main=names(plot.harm)[i])
+# }
+# dev.off()
+
+
+
+#nrow(unique(cbind.data.frame(prob.top10$st,prob.top10$epiyr, prob.top10$cm.age.level)))
+#PERIODICITYdic
+period.est<-pred.ipd.quantiles [grep("period[", row.names(pred.ipd.quantiles),fixed=TRUE),]
+#period.est<-period.est[-grep("ave.period[", row.names(period.est),fixed=TRUE),]
+period.est<-cbind.data.frame(period.est[,c(1,3,5)], unique(d1$st))
+period.sig<-period.est[ period.est$`unique(d1$st)` %in% c('1','12F','22F','3','4','5','7F','8','9N'),]
+matplot( period.sig[,1:3], xlim=c(0.5,11))
